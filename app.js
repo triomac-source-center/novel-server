@@ -4,15 +4,6 @@ import dotenv from 'dotenv'
 import morgan from 'morgan'
 import mongoose from 'mongoose'
 
-if (mongoose.connection.readyState === 0) {
-    mongoose.connect('mongodb+srv://larsonkapita_db_user:AtieZWc9cCeibmhQ@cluster0.gs40pkk.mongodb.net/larsonkapita_db_user?retryWrites=true&w=majority&appName=Cluster0x', {
-      useNewUrlParser: true,
-      useUnifiedTopology: true
-    })
-    .then(() => console.log('Connected to MongoDB'))
-    .catch(err => console.error('MongoDB connection error:', err));
-}
-
 let app = express()
 dotenv.config()
 app.use(morgan('dev'))
@@ -20,6 +11,16 @@ app.use(express.json({ limit: '50mb' }))
 app.use(cors())
 app.use(express.urlencoded({ extended: false }))
 
+const mongo_ui = process.env.MONGO_UI
+
+if (mongoose.connection.readyState === 0) {
+    mongoose.connect(mongo_ui, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true
+    })
+    .then(() => console.log('Connected to MongoDB'))
+    .catch(err => console.error('MongoDB connection error:', err));
+}
 
 app.get('/', (req, res) => {
     res.json({message: "wellcome home"})
