@@ -3,6 +3,7 @@ import cors from 'cors'
 import dotenv from 'dotenv'
 import morgan from 'morgan'
 import mongoose from 'mongoose'
+import depositRouter from './routes/deposit.js'
 
 let app = express()
 dotenv.config()
@@ -39,6 +40,9 @@ app.get("/api/:id", async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
+
+app.use("/api", depositRouter);
+
 
 const PORT = process.env.PORT || 3000;
 
