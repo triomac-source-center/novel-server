@@ -4,6 +4,8 @@ import dotenv from 'dotenv'
 import morgan from 'morgan'
 import mongoose from 'mongoose'
 import depositRouter from './routes/deposit.js'
+import clusterRouter from './routes/cluster_route.js'
+import allClusRouter from './routes/get_clus_router.js'
 
 let app = express()
 dotenv.config()
@@ -42,9 +44,11 @@ app.get("/api/:id", async (req, res) => {
 });
 
 app.use("/api", depositRouter);
+app.use("/api", clusterRouter);
+app.use("/api/all", allClusRouter);
 
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8000;
 
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running ...on port ${PORT} Done!`)
