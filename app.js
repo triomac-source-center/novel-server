@@ -6,6 +6,7 @@ import mongoose from 'mongoose'
 import depositRouter from './routes/deposit.js'
 import clusterRouter from './routes/cluster_route.js'
 import allClusRouter from './routes/get_clus_router.js'
+import accountRouter from './routes/account.js'
 
 let app = express()
 dotenv.config()
@@ -45,6 +46,7 @@ app.get("/api/:id", async (req, res) => {
 
 app.use("/api", depositRouter);
 app.use("/api", clusterRouter);
+app.use("/api", accountRouter);
 app.use("/api/all", allClusRouter);
 
 
