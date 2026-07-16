@@ -15,8 +15,27 @@ const ClusterSchema = new Schema(
     },
 
     holders: {
-      type: [String],
+      type: [
+        {
+          clerkId: { type: String, required: true },
+          cells: { type: Number, required: true, min: 1 },
+          amount: { type: Number, required: true, min: 0 },
+          investedAt: { type: Date, default: Date.now },
+        },
+      ],
       default: [],
+      _id: false,
+    },
+
+    name: {
+      type: String,
+      trim: true,
+    },
+
+    description: {
+      type: String,
+      trim: true,
+      default: "",
     },
 
     expVolume: {
@@ -40,8 +59,13 @@ const ClusterSchema = new Schema(
 
     status: {
       type: String,
-      enum: ["offline", "online"],
+      enum: ["offline", "online", "closed"],
       default: "offline",
+    },
+
+    closedAt: {
+      type: Date,
+      default: null,
     },
 
     symbol: {

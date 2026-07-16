@@ -1,5 +1,6 @@
 import express from "express";
 import mongoose from "mongoose";
+import { notify } from "../lib/notify.js";
 
 const accountRouter = express.Router();
 
@@ -224,6 +225,13 @@ accountRouter.post("/account/fund", async (req, res) => {
     broadcastBalanceUpdate(String(clerkId), {
       balance: nextBalance,
       accountType: normalizedType,
+    });
+
+    await notify({
+      clerkId: String(clerkId),
+      type: parsedAmount >= 0 ? "deposit" : "withdraw",
+      title: parsedAmount >= 0 ? "Balance credited" : "Balance debited",
+      message: `${normalizedType === "demo" ? "Demo" : "Real"} account ${parsedAmount >= 0 ? "credited" : "debited"} by $${Math.abs(parsedAmount).toLocaleString()}.`,
     });
 
     return res.status(200).json({

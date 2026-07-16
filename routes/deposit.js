@@ -1,5 +1,6 @@
 import express from "express";
 import mongoose from "mongoose";
+import { notify } from "../lib/notify.js";
 
 const depositRouter = express.Router();
 const Users = mongoose.connection.collection("users");
@@ -68,6 +69,13 @@ depositRouter.post("/deposit", async (req, res) => {
       },
       { returnDocument: "after" }
     );
+
+    await notify({
+      clerkId,
+      type: "deposit",
+      title: "Deposit received",
+      message: `$${amount.toLocaleString()} was added to your real account.`,
+    });
 
     res.status(200).json({
       message: "Deposit successful",
