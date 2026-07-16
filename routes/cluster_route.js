@@ -4,212 +4,130 @@ import clus from "../models/cluster_model.js";
 import { notify } from "../lib/notify.js";
 
 const clusterRouter = express.Router();
+const SYSTEM_NAME = "triomac60";
+const SYSTEM_SHARE_RATE = 0.16;
 
 const getUsersCollection = () => mongoose.connection.collection("users");
 
 function generateSignature() {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let signature = "";
-  for (let i = 0; i < 15; i++) {
-    signature += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return signature;
+  return Array.from({ length: 15 }, () => "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[Math.floor(Math.random() * 36)]).join("");
 }
 
-// Create a real cluster
+function cellPrice(cluster) {
+  return Number(cluster.entryPoint) + (Number(cluster.currentLayer || 1) - 1) * Number(cluster.layerStep || 0);
+}
+
+function ensureCells(cluster) {
+  if (Array.isArray(cluster.cells) && cluster.cells.length === Number(cluster.expVolume)) return;
+  const cells = [];
+  for (const holder of cluster.holders || []) {
+    for (let index = 0; index < Number(holder.cells || 0) && cells.length < Number(cluster.expVolume); index += 1) {
+      cells.push({ number: cells.length + 1, ownerClerkId: holder.clerkId, acquiredLayer: Number(cluster.currentLayer || 1), acquiredPrice: Number(holder.amount || 0) / Math.max(Number(holder.cells || 1), 1), acquiredAt: holder.investedAt || new Date() });
+    }
+  }
+  while (cells.length < Number(cluster.expVolume)) cells.push({ number: cells.length + 1, ownerClerkId: null, acquiredLayer: 0, acquiredPrice: 0, acquiredAt: null });
+  cluster.cells = cells;
+}
+
+function accountFor(user) {
+  return user.accounts?.real || { balance: user.wallet?.balance ?? 0, currency: "USD", transactions: [] };
+}
+
+async function writeAccount(Users, clerkId, user, account, transaction, session) {
+  const accounts = { ...(user.accounts || {}), real: { ...account, transactions: [...(account.transactions || []), transaction], updatedAt: new Date() } };
+  await Users.findOneAndUpdate(
+    { clerkId },
+    { $set: { accounts, "wallet.balance": account.balance, "wallet.transactions": [...(user.wallet?.transactions || []), transaction] } },
+    { session }
+  );
+}
+
+async function creditOwner(Users, clerkId, amount, description, session) {
+  const user = await Users.findOne({ clerkId }, { session });
+  if (!user) throw new Error(`Cell owner ${clerkId} no longer has an account`);
+  const account = accountFor(user);
+  const before = Number(account.balance || 0);
+  account.balance = before + amount;
+  await writeAccount(Users, clerkId, user, account, { type: "credit", amount, balanceBefore: before, balanceAfter: account.balance, description, createdAt: new Date() }, session);
+}
+
 clusterRouter.post("/clusters", async (req, res) => {
   try {
-    const {
-      clerkId,
-      symbol,
-      name,
-      description,
-      algorythm,
-      cellCount,
-      cellValue,
-    } = req.body;
-
-    if (!clerkId) {
-      return res.status(400).json({ success: false, error: "Missing clerkId" });
-    }
-    if (!symbol || !algorythm) {
-      return res.status(400).json({ success: false, error: "Missing symbol or algorythm" });
-    }
-
-    const parsedCellCount = Number(cellCount);
-    const parsedCellValue = Number(cellValue);
-
-    if (!Number.isFinite(parsedCellCount) || parsedCellCount <= 0) {
-      return res.status(400).json({ success: false, error: "Invalid cell count" });
-    }
-    if (!Number.isFinite(parsedCellValue) || parsedCellValue <= 0) {
-      return res.status(400).json({ success: false, error: "Invalid cell value" });
-    }
-
-    const data = {
-      holderPoint: 0,
-      entryPoint: parsedCellValue,
-      holders: [],
-      expVolume: parsedCellCount,
-      actualVolume: 0,
-      holderRemain: parsedCellCount,
-      creator: clerkId,
-      status: "offline",
-      symbol: symbol.trim(),
-      name: name?.trim() || symbol.trim(),
-      description: description?.trim() || "",
-      recette: 0,
-      algorythm: algorythm.trim(),
-      signature: generateSignature(),
-    };
-
-    const cluster = await clus.create(data);
-
-    await notify({
-      clerkId,
-      type: "cluster_created",
-      title: "Cluster created",
-      message: `Your cluster ${cluster.symbol} is live and open for investors.`,
-      relatedId: String(cluster._id),
-    });
-
-    return res.status(201).json({
-      success: true,
-      data: cluster,
-    });
+    const { clerkId, symbol, name, description, algorythm, cellCount, cellValue, maxLayers = 1, layerStep = 0 } = req.body;
+    if (!process.env.TRIOMAC60_ADMIN_CLERK_ID || clerkId !== process.env.TRIOMAC60_ADMIN_CLERK_ID) return res.status(403).json({ success: false, error: "Only the triomac60 administrator can create clusters" });
+    const count = Number(cellCount), value = Number(cellValue), layers = Number(maxLayers), step = Number(layerStep);
+    if (!symbol || !algorythm || !Number.isInteger(count) || count <= 0 || !Number.isFinite(value) || value <= 0 || !Number.isInteger(layers) || layers <= 0 || !Number.isFinite(step) || step < 0) return res.status(400).json({ success: false, error: "Invalid cluster configuration" });
+    const cells = Array.from({ length: count }, (_, index) => ({ number: index + 1, ownerClerkId: null, acquiredLayer: 0, acquiredPrice: 0, acquiredAt: null }));
+    const cluster = await clus.create({ holderPoint: 0, entryPoint: value, holders: [], expVolume: count, actualVolume: 0, holderRemain: count, creator: SYSTEM_NAME, status: "online", symbol: symbol.trim(), name: name?.trim() || symbol.trim(), description: description?.trim() || "", recette: 0, algorythm: algorythm.trim(), signature: generateSignature(), currentLayer: 1, maxLayers: layers, layerStep: step, cells, layerHistory: [{ layer: 1, pricePerCell: value, filledCells: 0 }], systemShareRate: SYSTEM_SHARE_RATE, systemReserve: 0 });
+    await notify({ clerkId, type: "cluster_created", title: "Cluster created", message: `${cluster.symbol} is ready for its first layer.`, relatedId: String(cluster._id) });
+    return res.status(201).json({ success: true, data: cluster });
   } catch (error) {
     console.error("Create cluster error:", error);
-    return res.status(400).json({
-      success: false,
-      error: error.message,
-    });
+    return res.status(400).json({ success: false, error: error.message });
   }
 });
 
-// Invest cells into an existing cluster
 clusterRouter.post("/clusters/:id/invest", async (req, res) => {
+  const session = await mongoose.startSession();
   try {
-    const { id } = req.params;
     const { clerkId, cells } = req.body;
+    const quantity = Number(cells);
+    if (!clerkId || !Number.isInteger(quantity) || quantity <= 0) return res.status(400).json({ success: false, error: "A valid investor and whole-cell quantity are required" });
+    let response;
+    await session.withTransaction(async () => {
+      const cluster = await clus.findById(req.params.id).session(session);
+      if (!cluster) throw new Error("Cluster not found");
+      if (cluster.status === "closed") throw new Error("This cluster has reached its final layer");
+      ensureCells(cluster);
+      const available = cluster.currentLayer === 1 ? cluster.cells.filter((cell) => !cell.ownerClerkId) : cluster.cells.filter((cell) => cell.ownerClerkId !== clerkId);
+      if (quantity > available.length) throw new Error(`Only ${available.length} cell(s) are available in layer ${cluster.currentLayer}`);
+      const investedLayer = Number(cluster.currentLayer);
+      const price = cellPrice(cluster);
+      const total = quantity * price;
+      const Users = getUsersCollection();
+      const investor = await Users.findOne({ clerkId }, { session });
+      if (!investor) throw new Error("Investor account not found");
+      const investorAccount = accountFor(investor);
+      const before = Number(investorAccount.balance || 0);
+      if (before < total) throw new Error("Insufficient real account balance");
+      investorAccount.balance = before - total;
+      const debit = { type: "debit", amount: total, balanceBefore: before, balanceAfter: investorAccount.balance, description: `Layer ${cluster.currentLayer}: ${quantity} cell(s) in ${cluster.symbol}`, createdAt: new Date() };
+      await writeAccount(Users, clerkId, investor, investorAccount, debit, session);
 
-    if (!clerkId) {
-      return res.status(400).json({ success: false, error: "Missing clerkId" });
-    }
-
-    const parsedCells = Number(cells);
-    if (!Number.isFinite(parsedCells) || parsedCells <= 0 || !Number.isInteger(parsedCells)) {
-      return res.status(400).json({ success: false, error: "Invalid cell count" });
-    }
-
-    const cluster = await clus.findById(id);
-    if (!cluster) {
-      return res.status(404).json({ success: false, error: "Cluster not found" });
-    }
-
-    if (cluster.status === "closed") {
-      return res.status(400).json({ success: false, error: "Cluster is already closed" });
-    }
-
-    if (parsedCells > cluster.holderRemain) {
-      return res.status(400).json({
-        success: false,
-        error: `Only ${cluster.holderRemain} cell(s) remaining in this cluster`,
-      });
-    }
-
-    const amount = parsedCells * cluster.entryPoint;
-
-    const Users = getUsersCollection();
-    const user = await Users.findOne({ clerkId });
-
-    if (!user) {
-      return res.status(404).json({ success: false, error: "User account not found" });
-    }
-
-    const realAccount = user.accounts?.real || { balance: user.wallet?.balance ?? 0, transactions: [] };
-    const currentBalance = Number(realAccount.balance ?? 0);
-
-    if (currentBalance < amount) {
-      return res.status(400).json({ success: false, error: "Insufficient real account balance" });
-    }
-
-    const balanceAfter = currentBalance - amount;
-
-    const transaction = {
-      type: "debit",
-      amount,
-      balanceBefore: currentBalance,
-      balanceAfter,
-      description: `Invested ${parsedCells} cell(s) in cluster ${cluster.symbol}`,
-      createdAt: new Date(),
-    };
-
-    const nextAccounts = {
-      ...(user.accounts || {}),
-      real: {
-        ...realAccount,
-        balance: balanceAfter,
-        transactions: [...(realAccount.transactions || []), transaction],
-        updatedAt: new Date(),
-      },
-    };
-
-    await Users.findOneAndUpdate(
-      { clerkId },
-      {
-        $set: {
-          accounts: nextAccounts,
-          "wallet.balance": balanceAfter,
-          "wallet.transactions": [...((user.wallet?.transactions || [])), transaction],
-        },
+      const selected = available.slice(0, quantity);
+      const ownerPayments = new Map();
+      for (const cell of selected) if (cell.ownerClerkId) ownerPayments.set(cell.ownerClerkId, (ownerPayments.get(cell.ownerClerkId) || 0) + price);
+      for (const [ownerClerkId, amount] of ownerPayments) {
+        await creditOwner(Users, ownerClerkId, amount, `Cell transferred in ${cluster.symbol}, layer ${cluster.currentLayer}`, session);
       }
-    );
+      for (const cell of selected) Object.assign(cell, { ownerClerkId: clerkId, acquiredLayer: cluster.currentLayer, acquiredPrice: price, acquiredAt: new Date() });
 
-    cluster.holders.push({ clerkId, cells: parsedCells, amount });
-    cluster.holderPoint += parsedCells;
-    cluster.actualVolume += amount;
-    cluster.holderRemain -= parsedCells;
-    cluster.recette = cluster.actualVolume * 0.16;
+      cluster.holderPoint = Number(cluster.holderPoint || 0) + quantity;
+      cluster.holderRemain = Number(cluster.expVolume) - cluster.holderPoint;
+      cluster.actualVolume = Number(cluster.actualVolume || 0) + total;
+      cluster.holders.push({ clerkId, cells: quantity, amount: total, investedAt: new Date() });
+      const history = cluster.layerHistory.find((item) => item.layer === cluster.currentLayer);
+      if (history) history.filledCells = cluster.holderPoint;
+      if (cluster.currentLayer === 1) { const systemFee = total * Number(cluster.systemShareRate ?? SYSTEM_SHARE_RATE); cluster.systemReserve = Number(cluster.systemReserve || 0) + systemFee; cluster.recette = cluster.systemReserve; }
 
-    const justClosed = cluster.holderRemain === 0 && cluster.status !== "closed";
-    if (justClosed) {
-      cluster.status = "closed";
-      cluster.closedAt = new Date();
-    } else if (cluster.status === "offline") {
-      cluster.status = "online";
-    }
-
-    await cluster.save();
-
-    await notify({
-      clerkId,
-      type: "invest",
-      title: "Investment confirmed",
-      message: `You invested $${amount.toLocaleString()} (${parsedCells} cell${parsedCells > 1 ? "s" : ""}) in cluster ${cluster.symbol}.`,
-      relatedId: String(cluster._id),
+      let layerAdvanced = false, closed = false;
+      if (cluster.holderRemain === 0) {
+        if (history) history.completedAt = new Date();
+        if (cluster.currentLayer >= cluster.maxLayers) { cluster.status = "closed"; cluster.closedAt = new Date(); closed = true; }
+        else { cluster.currentLayer += 1; cluster.holderPoint = 0; cluster.holderRemain = cluster.expVolume; cluster.actualVolume = 0; cluster.holders = []; cluster.layerHistory.push({ layer: cluster.currentLayer, pricePerCell: cellPrice(cluster), filledCells: 0, openedAt: new Date() }); layerAdvanced = true; }
+      }
+      await cluster.save({ session });
+      response = { cluster, balance: investorAccount.balance, total, price, investedLayer, layerAdvanced, closed, previousOwners: [...ownerPayments.keys()] };
     });
-
-    if (justClosed) {
-      await notify({
-        clerkId: cluster.creator,
-        type: "cluster_filled",
-        title: "Cluster fully funded",
-        message: `Your cluster ${cluster.symbol} has reached its target and is now closed.`,
-        relatedId: String(cluster._id),
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      data: cluster,
-      wallet: { balance: balanceAfter },
-    });
+    await notify({ clerkId, type: "investment", title: "Investment confirmed", message: `You acquired ${quantity} cell(s) in ${response.cluster.symbol}, layer ${response.investedLayer}${response.layerAdvanced ? "; the next layer is now open." : ""}`, relatedId: String(response.cluster._id) });
+    for (const ownerClerkId of response.previousOwners) await notify({ clerkId: ownerClerkId, type: "cell_transferred", title: "Cell transfer paid", message: `Your cell in ${response.cluster.symbol} was transferred and your account was credited.`, relatedId: String(response.cluster._id) });
+    if (response.closed) await notify({ clerkId: process.env.TRIOMAC60_ADMIN_CLERK_ID, type: "cluster_closed", title: "Final layer complete", message: `${response.cluster.symbol} is now closed.`, relatedId: String(response.cluster._id) });
+    return res.status(200).json({ success: true, data: response.cluster, wallet: { balance: response.balance }, investment: { amount: response.total, pricePerCell: response.price } });
   } catch (error) {
     console.error("Invest in cluster error:", error);
-    return res.status(400).json({
-      success: false,
-      error: error.message,
-    });
+    return res.status(error.message === "Cluster not found" ? 404 : 400).json({ success: false, error: error.message });
+  } finally {
+    await session.endSession();
   }
 });
 

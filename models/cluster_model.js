@@ -2,6 +2,28 @@ import mongoose from "mongoose";
 
 const { Schema } = mongoose;
 
+const CellSchema = new Schema(
+  {
+    number: { type: Number, required: true },
+    ownerClerkId: { type: String, default: null },
+    acquiredLayer: { type: Number, default: 0 },
+    acquiredPrice: { type: Number, default: 0 },
+    acquiredAt: { type: Date, default: null },
+  },
+  { _id: false }
+);
+
+const LayerSchema = new Schema(
+  {
+    layer: { type: Number, required: true },
+    pricePerCell: { type: Number, required: true },
+    filledCells: { type: Number, default: 0 },
+    openedAt: { type: Date, default: Date.now },
+    completedAt: { type: Date, default: null },
+  },
+  { _id: false }
+);
+
 const ClusterSchema = new Schema(
   {
     holderPoint: {
@@ -13,6 +35,14 @@ const ClusterSchema = new Schema(
       type: Number,
       required: true,
     },
+
+    currentLayer: { type: Number, default: 1, min: 1 },
+    maxLayers: { type: Number, default: 1, min: 1 },
+    layerStep: { type: Number, default: 0, min: 0 },
+    cells: { type: [CellSchema], default: [] },
+    layerHistory: { type: [LayerSchema], default: [] },
+    systemShareRate: { type: Number, default: 0.16, min: 0, max: 1 },
+    systemReserve: { type: Number, default: 0, min: 0 },
 
     holders: {
       type: [
