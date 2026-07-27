@@ -17,6 +17,10 @@ function cellPrice(cluster) {
   return Number(cluster.entryPoint) + (Number(cluster.currentLayer || 1) - 1) * Number(cluster.layerStep || 0);
 }
 
+function isAdmin(clerkId) {
+  return Boolean(process.env.TRIOMAC60_ADMIN_CLERK_ID) && clerkId === process.env.TRIOMAC60_ADMIN_CLERK_ID;
+}
+
 function ensureCells(cluster) {
   if (Array.isArray(cluster.cells) && cluster.cells.length === Number(cluster.expVolume)) return;
   const cells = [];
@@ -54,12 +58,12 @@ async function creditOwner(Users, clerkId, amount, description, session) {
 clusterRouter.post("/clusters", async (req, res) => {
   try {
     const { clerkId, symbol, name, description, algorythm, cellCount, cellValue, maxLayers = 1, layerStep = 0 } = req.body;
-    if (!process.env.TRIOMAC60_ADMIN_CLERK_ID || clerkId !== process.env.TRIOMAC60_ADMIN_CLERK_ID) return res.status(403).json({ success: false, error: "Only the triomac60 administrator can create clusters" });
+    if (!isAdmin(clerkId)) return res.status(403).json({ success: false, error: "Only the triomac60 administrator can create clusters" });
     const count = Number(cellCount), value = Number(cellValue), layers = Number(maxLayers), step = Number(layerStep);
     if (!symbol || !algorythm || !Number.isInteger(count) || count <= 0 || !Number.isFinite(value) || value <= 0 || !Number.isInteger(layers) || layers <= 0 || !Number.isFinite(step) || step < 0) return res.status(400).json({ success: false, error: "Invalid cluster configuration" });
     const cells = Array.from({ length: count }, (_, index) => ({ number: index + 1, ownerClerkId: null, acquiredLayer: 0, acquiredPrice: 0, acquiredAt: null }));
-    const cluster = await clus.create({ holderPoint: 0, entryPoint: value, holders: [], expVolume: count, actualVolume: 0, holderRemain: count, creator: SYSTEM_NAME, status: "online", symbol: symbol.trim(), name: name?.trim() || symbol.trim(), description: description?.trim() || "", recette: 0, algorythm: algorythm.trim(), signature: generateSignature(), currentLayer: 1, maxLayers: layers, layerStep: step, cells, layerHistory: [{ layer: 1, pricePerCell: value, filledCells: 0 }], systemShareRate: SYSTEM_SHARE_RATE, systemReserve: 0 });
-    await notify({ clerkId, type: "cluster_created", title: "Cluster created", message: `${cluster.symbol} is ready for its first layer.`, relatedId: String(cluster._id) });
+    const cluster = await clus.create({ holderPoint: 0, entryPoint: value, holders: [], expVolume: count, actualVolume: 0, holderRemain: count, creator: SYSTEM_NAME, status: "offline", symbol: symbol.trim(), name: name?.trim() || symbol.trim(), description: description?.trim() || "", recette: 0, algorythm: algorythm.trim(), signature: generateSignature(), currentLayer: 1, maxLayers: layers, layerStep: step, cells, layerHistory: [{ layer: 1, pricePerCell: value, filledCells: 0 }], systemShareRate: SYSTEM_SHARE_RATE, systemReserve: 0 });
+    await notify({ clerkId, type: "cluster_created", title: "Cluster created (draft)", message: `${cluster.symbol} was created as a draft. Publish it to open it for investment.`, relatedId: String(cluster._id) });
     return res.status(201).json({ success: true, data: cluster });
   } catch (error) {
     console.error("Create cluster error:", error);
@@ -78,6 +82,7 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
       const cluster = await clus.findById(req.params.id).session(session);
       if (!cluster) throw new Error("Cluster not found");
       if (cluster.status === "closed") throw new Error("This cluster has reached its final layer");
+      if (cluster.status === "offline") throw new Error("This cluster has not been published yet");
       ensureCells(cluster);
       const available = cluster.currentLayer === 1 ? cluster.cells.filter((cell) => !cell.ownerClerkId) : cluster.cells.filter((cell) => cell.ownerClerkId !== clerkId);
       if (quantity > available.length) throw new Error(`Only ${available.length} cell(s) are available in layer ${cluster.currentLayer}`);
@@ -128,6 +133,41 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
     return res.status(error.message === "Cluster not found" ? 404 : 400).json({ success: false, error: error.message });
   } finally {
     await session.endSession();
+  }
+});
+
+clusterRouter.patch("/clusters/:id/publish", async (req, res) => {
+  try {
+    const { clerkId } = req.body;
+    if (!isAdmin(clerkId)) return res.status(403).json({ success: false, error: "Only the triomac60 administrator can publish clusters" });
+    const cluster = await clus.findById(req.params.id);
+    if (!cluster) return res.status(404).json({ success: false, error: "Cluster not found" });
+    if (cluster.status !== "offline") return res.status(400).json({ success: false, error: "Only a draft cluster can be published" });
+    cluster.status = "online";
+    await cluster.save();
+    await notify({ clerkId: process.env.TRIOMAC60_ADMIN_CLERK_ID, type: "cluster_published", title: "Cluster published", message: `${cluster.symbol} is now open for investment.`, relatedId: String(cluster._id) });
+    return res.status(200).json({ success: true, data: cluster });
+  } catch (error) {
+    console.error("Publish cluster error:", error);
+    return res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+clusterRouter.patch("/clusters/:id/close", async (req, res) => {
+  try {
+    const { clerkId } = req.body;
+    if (!isAdmin(clerkId)) return res.status(403).json({ success: false, error: "Only the triomac60 administrator can close clusters" });
+    const cluster = await clus.findById(req.params.id);
+    if (!cluster) return res.status(404).json({ success: false, error: "Cluster not found" });
+    if (cluster.status === "closed") return res.status(400).json({ success: false, error: "Cluster is already closed" });
+    cluster.status = "closed";
+    cluster.closedAt = new Date();
+    await cluster.save();
+    await notify({ clerkId: process.env.TRIOMAC60_ADMIN_CLERK_ID, type: "cluster_closed", title: "Cluster closed", message: `${cluster.symbol} was manually closed.`, relatedId: String(cluster._id) });
+    return res.status(200).json({ success: true, data: cluster });
+  } catch (error) {
+    console.error("Close cluster error:", error);
+    return res.status(400).json({ success: false, error: error.message });
   }
 });
 
