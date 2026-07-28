@@ -137,8 +137,19 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
       if (cluster.status === "closed") throw new Error("This cluster has reached its final layer");
       if (cluster.status === "offline") throw new Error("This cluster has not been published yet");
       ensureCells(cluster);
-      const available = cluster.currentLayer === 1 ? cluster.cells.filter((cell) => !cell.ownerClerkId) : cluster.cells.filter((cell) => cell.ownerClerkId !== clerkId);
-      if (quantity > available.length) throw new Error(`Only ${available.length} cell(s) are available in layer ${cluster.currentLayer}`);
+      const isFirstLayer = cluster.currentLayer === 1;
+      // At layer > 1 any cell can change hands (the current owner gets bought out at the live
+      // price). Cells owned by someone else are offered first so real payouts happen; a buyer's
+      // own cells are only used as a fallback once no other investor's cells remain this round,
+      // so a single tester/admin account can still progress a layer without a second account.
+      const available = isFirstLayer
+        ? cluster.cells.filter((cell) => !cell.ownerClerkId)
+        : [
+            ...cluster.cells.filter((cell) => cell.ownerClerkId !== clerkId),
+            ...cluster.cells.filter((cell) => cell.ownerClerkId === clerkId),
+          ];
+      const maxPurchasable = Math.min(available.length, Number(cluster.holderRemain) || 0);
+      if (quantity > maxPurchasable) throw new Error(`Only ${maxPurchasable} cell(s) are available in layer ${cluster.currentLayer}`);
       const investedLayer = Number(cluster.currentLayer);
       const price = cellPrice(cluster);
       const total = quantity * price;
@@ -270,6 +281,31 @@ clusterRouter.patch("/clusters/:id/close", async (req, res) => {
     return res.status(200).json({ success: true, data: cluster });
   } catch (error) {
     console.error("Close cluster error:", error);
+    return res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+clusterRouter.delete("/clusters/:id", async (req, res) => {
+  try {
+    const { clerkId, adminCode } = req.body;
+    if (!isAdmin(clerkId, adminCode)) return res.status(403).json({ success: false, error: "Only the triomac60 administrator or a valid admin code can delete clusters" });
+    const cluster = await clus.findByIdAndDelete(req.params.id);
+    if (!cluster) return res.status(404).json({ success: false, error: "Cluster not found" });
+    return res.status(200).json({ success: true, data: { _id: req.params.id } });
+  } catch (error) {
+    console.error("Delete cluster error:", error);
+    return res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+clusterRouter.delete("/clusters", async (req, res) => {
+  try {
+    const { clerkId, adminCode } = req.body;
+    if (!isAdmin(clerkId, adminCode)) return res.status(403).json({ success: false, error: "Only the triomac60 administrator or a valid admin code can delete clusters" });
+    const result = await clus.deleteMany({});
+    return res.status(200).json({ success: true, deletedCount: result.deletedCount });
+  } catch (error) {
+    console.error("Delete all clusters error:", error);
     return res.status(400).json({ success: false, error: error.message });
   }
 });
