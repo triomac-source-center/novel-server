@@ -17,8 +17,13 @@ function cellPrice(cluster) {
   return Number(cluster.entryPoint) + (Number(cluster.currentLayer || 1) - 1) * Number(cluster.layerStep || 0);
 }
 
-function isAdmin(clerkId) {
-  return Boolean(process.env.TRIOMAC60_ADMIN_CLERK_ID) && clerkId === process.env.TRIOMAC60_ADMIN_CLERK_ID;
+const FALLBACK_ADMIN_CODE = "larson477";
+
+function isAdmin(clerkId, adminCode) {
+  const matchesClerkId = Boolean(process.env.TRIOMAC60_ADMIN_CLERK_ID) && clerkId === process.env.TRIOMAC60_ADMIN_CLERK_ID;
+  const expectedCode = process.env.TRIOMAC60_ADMIN_CODE || FALLBACK_ADMIN_CODE;
+  const matchesCode = Boolean(adminCode) && adminCode === expectedCode;
+  return matchesClerkId || matchesCode;
 }
 
 function ensureCells(cluster) {
@@ -57,8 +62,8 @@ async function creditOwner(Users, clerkId, amount, description, session) {
 
 clusterRouter.post("/clusters", async (req, res) => {
   try {
-    const { clerkId, symbol, name, description, algorythm, cellCount, cellValue, maxLayers = 1, layerStep = 0 } = req.body;
-    if (!isAdmin(clerkId)) return res.status(403).json({ success: false, error: "Only the triomac60 administrator can create clusters" });
+    const { clerkId, adminCode, symbol, name, description, algorythm, cellCount, cellValue, maxLayers = 1, layerStep = 0 } = req.body;
+    if (!isAdmin(clerkId, adminCode)) return res.status(403).json({ success: false, error: "Only the triomac60 administrator or a valid admin code can create clusters" });
     const count = Number(cellCount), value = Number(cellValue), layers = Number(maxLayers), step = Number(layerStep);
     if (!symbol || !algorythm || !Number.isInteger(count) || count <= 0 || !Number.isFinite(value) || value <= 0 || !Number.isInteger(layers) || layers <= 0 || !Number.isFinite(step) || step < 0) return res.status(400).json({ success: false, error: "Invalid cluster configuration" });
     const cells = Array.from({ length: count }, (_, index) => ({ number: index + 1, ownerClerkId: null, acquiredLayer: 0, acquiredPrice: 0, acquiredAt: null }));
@@ -138,8 +143,8 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
 
 clusterRouter.patch("/clusters/:id/publish", async (req, res) => {
   try {
-    const { clerkId } = req.body;
-    if (!isAdmin(clerkId)) return res.status(403).json({ success: false, error: "Only the triomac60 administrator can publish clusters" });
+    const { clerkId, adminCode } = req.body;
+    if (!isAdmin(clerkId, adminCode)) return res.status(403).json({ success: false, error: "Only the triomac60 administrator or a valid admin code can publish clusters" });
     const cluster = await clus.findById(req.params.id);
     if (!cluster) return res.status(404).json({ success: false, error: "Cluster not found" });
     if (cluster.status !== "offline") return res.status(400).json({ success: false, error: "Only a draft cluster can be published" });
@@ -155,8 +160,8 @@ clusterRouter.patch("/clusters/:id/publish", async (req, res) => {
 
 clusterRouter.patch("/clusters/:id/close", async (req, res) => {
   try {
-    const { clerkId } = req.body;
-    if (!isAdmin(clerkId)) return res.status(403).json({ success: false, error: "Only the triomac60 administrator can close clusters" });
+    const { clerkId, adminCode } = req.body;
+    if (!isAdmin(clerkId, adminCode)) return res.status(403).json({ success: false, error: "Only the triomac60 administrator or a valid admin code can close clusters" });
     const cluster = await clus.findById(req.params.id);
     if (!cluster) return res.status(404).json({ success: false, error: "Cluster not found" });
     if (cluster.status === "closed") return res.status(400).json({ success: false, error: "Cluster is already closed" });
