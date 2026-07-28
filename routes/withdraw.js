@@ -1,6 +1,7 @@
 import express from "express";
 import mongoose from "mongoose";
 import { notify } from "../lib/notify.js";
+import { broadcastBalanceUpdate } from "../lib/sse.js";
 
 const withdrawRouter = express.Router();
 
@@ -37,6 +38,7 @@ withdrawRouter.post("/withdraw", async (req, res) => {
 
     const transaction = {
       type: "debit",
+      category: "wallet",
       amount: parsedAmount,
       balanceBefore: currentBalance,
       balanceAfter,
@@ -65,6 +67,8 @@ withdrawRouter.post("/withdraw", async (req, res) => {
       },
       { returnDocument: "after" }
     );
+
+    broadcastBalanceUpdate(String(clerkId), { balance: balanceAfter, accountType: "real" });
 
     await notify({
       clerkId,

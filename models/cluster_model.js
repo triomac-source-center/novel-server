@@ -24,6 +24,24 @@ const LayerSchema = new Schema(
   { _id: false }
 );
 
+const ActivityLogSchema = new Schema(
+  {
+    type: {
+      type: String,
+      enum: ["created", "published", "closed", "invest", "transfer", "layer_advance"],
+      required: true,
+    },
+    clerkId: { type: String, default: null },
+    counterpartyClerkId: { type: String, default: null },
+    cells: { type: Number, default: 0 },
+    amount: { type: Number, default: 0 },
+    costBasis: { type: Number, default: 0 },
+    layer: { type: Number, default: 1 },
+    createdAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
 const ClusterSchema = new Schema(
   {
     holderPoint: {
@@ -41,6 +59,7 @@ const ClusterSchema = new Schema(
     layerStep: { type: Number, default: 0, min: 0 },
     cells: { type: [CellSchema], default: [] },
     layerHistory: { type: [LayerSchema], default: [] },
+    activityLog: { type: [ActivityLogSchema], default: [] },
     systemShareRate: { type: Number, default: 0.16, min: 0, max: 1 },
     systemReserve: { type: Number, default: 0, min: 0 },
 

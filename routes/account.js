@@ -1,43 +1,11 @@
 import express from "express";
 import mongoose from "mongoose";
 import { notify } from "../lib/notify.js";
+import { addSseClient, broadcastBalanceUpdate } from "../lib/sse.js";
 
 const accountRouter = express.Router();
 
-const sseClients = [];
-
 const getUsersCollection = () => mongoose.connection.collection("users");
-
-const sendSseEvent = (res, event, data) => {
-  res.write(`event: ${event}\n`);
-  res.write(`data: ${JSON.stringify(data)}\n\n`);
-};
-
-const addSseClient = (req, res, clerkId) => {
-  const client = { req, res, clerkId };
-  sseClients.push(client);
-
-  req.on("close", () => {
-    const index = sseClients.indexOf(client);
-    if (index !== -1) {
-      sseClients.splice(index, 1);
-    }
-  });
-};
-
-const broadcastBalanceUpdate = (clerkId, data) => {
-  sseClients.slice().forEach((client) => {
-    if (client.clerkId !== clerkId) return;
-    try {
-      sendSseEvent(client.res, "balance-update", data);
-    } catch (error) {
-      const index = sseClients.indexOf(client);
-      if (index !== -1) {
-        sseClients.splice(index, 1);
-      }
-    }
-  });
-};
 
 const getDefaultAccounts = () => ({
   demo: {
@@ -192,6 +160,7 @@ accountRouter.post("/account/fund", async (req, res) => {
 
     const transaction = {
       type: parsedAmount >= 0 ? "credit" : "debit",
+      category: "wallet",
       amount: Math.abs(parsedAmount),
       balanceBefore: currentAccount.balance,
       balanceAfter: nextBalance,
@@ -275,6 +244,7 @@ accountRouter.post("/account/set-demo-balance", async (req, res) => {
 
     const transaction = {
       type: "set",
+      category: "wallet",
       amount: parsedAmount,
       balanceBefore: currentAccount.balance,
       balanceAfter: parsedAmount,

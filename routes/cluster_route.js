@@ -2,6 +2,7 @@ import express from "express";
 import mongoose from "mongoose";
 import clus from "../models/cluster_model.js";
 import { notify } from "../lib/notify.js";
+import { broadcastBalanceUpdate } from "../lib/sse.js";
 
 const clusterRouter = express.Router();
 const SYSTEM_NAME = "triomac60";
@@ -24,6 +25,10 @@ function isAdmin(clerkId, adminCode) {
   const expectedCode = process.env.TRIOMAC60_ADMIN_CODE || FALLBACK_ADMIN_CODE;
   const matchesCode = Boolean(adminCode) && adminCode === expectedCode;
   return matchesClerkId || matchesCode;
+}
+
+function pushActivity(cluster, entry) {
+  cluster.activityLog.push({ createdAt: new Date(), ...entry });
 }
 
 function ensureCells(cluster) {
@@ -51,13 +56,33 @@ async function writeAccount(Users, clerkId, user, account, transaction, session)
   );
 }
 
-async function creditOwner(Users, clerkId, amount, description, session) {
+async function creditOwner(Users, clerkId, amount, description, session, meta = {}) {
   const user = await Users.findOne({ clerkId }, { session });
   if (!user) throw new Error(`Cell owner ${clerkId} no longer has an account`);
   const account = accountFor(user);
   const before = Number(account.balance || 0);
   account.balance = before + amount;
-  await writeAccount(Users, clerkId, user, account, { type: "credit", amount, balanceBefore: before, balanceAfter: account.balance, description, createdAt: new Date() }, session);
+  await writeAccount(
+    Users,
+    clerkId,
+    user,
+    account,
+    {
+      type: "credit",
+      category: "investment",
+      amount,
+      balanceBefore: before,
+      balanceAfter: account.balance,
+      description,
+      clusterId: meta.clusterId ?? null,
+      clusterSymbol: meta.clusterSymbol ?? null,
+      layer: meta.layer ?? null,
+      costBasis: meta.costBasis ?? 0,
+      createdAt: new Date(),
+    },
+    session
+  );
+  broadcastBalanceUpdate(String(clerkId), { balance: account.balance, accountType: "real" });
 }
 
 clusterRouter.post("/clusters", async (req, res) => {
@@ -67,7 +92,30 @@ clusterRouter.post("/clusters", async (req, res) => {
     const count = Number(cellCount), value = Number(cellValue), layers = Number(maxLayers), step = Number(layerStep);
     if (!symbol || !algorythm || !Number.isInteger(count) || count <= 0 || !Number.isFinite(value) || value <= 0 || !Number.isInteger(layers) || layers <= 0 || !Number.isFinite(step) || step < 0) return res.status(400).json({ success: false, error: "Invalid cluster configuration" });
     const cells = Array.from({ length: count }, (_, index) => ({ number: index + 1, ownerClerkId: null, acquiredLayer: 0, acquiredPrice: 0, acquiredAt: null }));
-    const cluster = await clus.create({ holderPoint: 0, entryPoint: value, holders: [], expVolume: count, actualVolume: 0, holderRemain: count, creator: SYSTEM_NAME, status: "offline", symbol: symbol.trim(), name: name?.trim() || symbol.trim(), description: description?.trim() || "", recette: 0, algorythm: algorythm.trim(), signature: generateSignature(), currentLayer: 1, maxLayers: layers, layerStep: step, cells, layerHistory: [{ layer: 1, pricePerCell: value, filledCells: 0 }], systemShareRate: SYSTEM_SHARE_RATE, systemReserve: 0 });
+    const cluster = await clus.create({
+      holderPoint: 0,
+      entryPoint: value,
+      holders: [],
+      expVolume: count,
+      actualVolume: 0,
+      holderRemain: count,
+      creator: SYSTEM_NAME,
+      status: "offline",
+      symbol: symbol.trim(),
+      name: name?.trim() || symbol.trim(),
+      description: description?.trim() || "",
+      recette: 0,
+      algorythm: algorythm.trim(),
+      signature: generateSignature(),
+      currentLayer: 1,
+      maxLayers: layers,
+      layerStep: step,
+      cells,
+      layerHistory: [{ layer: 1, pricePerCell: value, filledCells: 0 }],
+      activityLog: [{ type: "created", clerkId, layer: 1, createdAt: new Date() }],
+      systemShareRate: SYSTEM_SHARE_RATE,
+      systemReserve: 0,
+    });
     await notify({ clerkId, type: "cluster_created", title: "Cluster created (draft)", message: `${cluster.symbol} was created as a draft. Publish it to open it for investment.`, relatedId: String(cluster._id) });
     return res.status(201).json({ success: true, data: cluster });
   } catch (error) {
@@ -101,16 +149,51 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
       const before = Number(investorAccount.balance || 0);
       if (before < total) throw new Error("Insufficient real account balance");
       investorAccount.balance = before - total;
-      const debit = { type: "debit", amount: total, balanceBefore: before, balanceAfter: investorAccount.balance, description: `Layer ${cluster.currentLayer}: ${quantity} cell(s) in ${cluster.symbol}`, createdAt: new Date() };
+      const debit = {
+        type: "debit",
+        category: "investment",
+        amount: total,
+        balanceBefore: before,
+        balanceAfter: investorAccount.balance,
+        description: `Layer ${cluster.currentLayer}: ${quantity} cell(s) in ${cluster.symbol}`,
+        clusterId: String(cluster._id),
+        clusterSymbol: cluster.symbol,
+        layer: investedLayer,
+        createdAt: new Date(),
+      };
       await writeAccount(Users, clerkId, investor, investorAccount, debit, session);
+      broadcastBalanceUpdate(String(clerkId), { balance: investorAccount.balance, accountType: "real" });
 
       const selected = available.slice(0, quantity);
       const ownerPayments = new Map();
-      for (const cell of selected) if (cell.ownerClerkId) ownerPayments.set(cell.ownerClerkId, (ownerPayments.get(cell.ownerClerkId) || 0) + price);
-      for (const [ownerClerkId, amount] of ownerPayments) {
-        await creditOwner(Users, ownerClerkId, amount, `Cell transferred in ${cluster.symbol}, layer ${cluster.currentLayer}`, session);
+      for (const cell of selected) {
+        if (!cell.ownerClerkId) continue;
+        const existing = ownerPayments.get(cell.ownerClerkId) || { amount: 0, costBasis: 0, cells: 0 };
+        existing.amount += price;
+        existing.costBasis += Number(cell.acquiredPrice || 0);
+        existing.cells += 1;
+        ownerPayments.set(cell.ownerClerkId, existing);
+      }
+      for (const [ownerClerkId, payment] of ownerPayments) {
+        await creditOwner(Users, ownerClerkId, payment.amount, `Cell transferred in ${cluster.symbol}, layer ${cluster.currentLayer}`, session, {
+          clusterId: String(cluster._id),
+          clusterSymbol: cluster.symbol,
+          layer: investedLayer,
+          costBasis: payment.costBasis,
+        });
+        pushActivity(cluster, {
+          type: "transfer",
+          clerkId: ownerClerkId,
+          counterpartyClerkId: clerkId,
+          cells: payment.cells,
+          amount: payment.amount,
+          costBasis: payment.costBasis,
+          layer: investedLayer,
+        });
       }
       for (const cell of selected) Object.assign(cell, { ownerClerkId: clerkId, acquiredLayer: cluster.currentLayer, acquiredPrice: price, acquiredAt: new Date() });
+
+      pushActivity(cluster, { type: "invest", clerkId, cells: quantity, amount: total, layer: investedLayer });
 
       cluster.holderPoint = Number(cluster.holderPoint || 0) + quantity;
       cluster.holderRemain = Number(cluster.expVolume) - cluster.holderPoint;
@@ -123,8 +206,21 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
       let layerAdvanced = false, closed = false;
       if (cluster.holderRemain === 0) {
         if (history) history.completedAt = new Date();
-        if (cluster.currentLayer >= cluster.maxLayers) { cluster.status = "closed"; cluster.closedAt = new Date(); closed = true; }
-        else { cluster.currentLayer += 1; cluster.holderPoint = 0; cluster.holderRemain = cluster.expVolume; cluster.actualVolume = 0; cluster.holders = []; cluster.layerHistory.push({ layer: cluster.currentLayer, pricePerCell: cellPrice(cluster), filledCells: 0, openedAt: new Date() }); layerAdvanced = true; }
+        if (cluster.currentLayer >= cluster.maxLayers) {
+          cluster.status = "closed";
+          cluster.closedAt = new Date();
+          closed = true;
+          pushActivity(cluster, { type: "closed", layer: cluster.currentLayer });
+        } else {
+          cluster.currentLayer += 1;
+          cluster.holderPoint = 0;
+          cluster.holderRemain = cluster.expVolume;
+          cluster.actualVolume = 0;
+          cluster.holders = [];
+          cluster.layerHistory.push({ layer: cluster.currentLayer, pricePerCell: cellPrice(cluster), filledCells: 0, openedAt: new Date() });
+          layerAdvanced = true;
+          pushActivity(cluster, { type: "layer_advance", layer: cluster.currentLayer });
+        }
       }
       await cluster.save({ session });
       response = { cluster, balance: investorAccount.balance, total, price, investedLayer, layerAdvanced, closed, previousOwners: [...ownerPayments.keys()] };
@@ -149,6 +245,7 @@ clusterRouter.patch("/clusters/:id/publish", async (req, res) => {
     if (!cluster) return res.status(404).json({ success: false, error: "Cluster not found" });
     if (cluster.status !== "offline") return res.status(400).json({ success: false, error: "Only a draft cluster can be published" });
     cluster.status = "online";
+    pushActivity(cluster, { type: "published", clerkId, layer: cluster.currentLayer });
     await cluster.save();
     await notify({ clerkId: process.env.TRIOMAC60_ADMIN_CLERK_ID, type: "cluster_published", title: "Cluster published", message: `${cluster.symbol} is now open for investment.`, relatedId: String(cluster._id) });
     return res.status(200).json({ success: true, data: cluster });
@@ -167,6 +264,7 @@ clusterRouter.patch("/clusters/:id/close", async (req, res) => {
     if (cluster.status === "closed") return res.status(400).json({ success: false, error: "Cluster is already closed" });
     cluster.status = "closed";
     cluster.closedAt = new Date();
+    pushActivity(cluster, { type: "closed", clerkId, layer: cluster.currentLayer });
     await cluster.save();
     await notify({ clerkId: process.env.TRIOMAC60_ADMIN_CLERK_ID, type: "cluster_closed", title: "Cluster closed", message: `${cluster.symbol} was manually closed.`, relatedId: String(cluster._id) });
     return res.status(200).json({ success: true, data: cluster });
