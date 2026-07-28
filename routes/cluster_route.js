@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import clus from "../models/cluster_model.js";
 import { notify } from "../lib/notify.js";
 import { broadcastBalanceUpdate } from "../lib/sse.js";
+import { ensureUserRecord } from "../lib/user-account.js";
 
 const clusterRouter = express.Router();
 const SYSTEM_NAME = "triomac60";
@@ -130,6 +131,10 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
     const { clerkId, cells } = req.body;
     const quantity = Number(cells);
     if (!clerkId || !Number.isInteger(quantity) || quantity <= 0) return res.status(400).json({ success: false, error: "A valid investor and whole-cell quantity are required" });
+    // Auto-creates the investor's wallet document if this is their first account-related action
+    // (e.g. investing before ever visiting the wallet page) instead of failing with a confusing
+    // "not found" error — same fix as deposit.js/withdraw.js.
+    await ensureUserRecord(String(clerkId));
     let response;
     await session.withTransaction(async () => {
       const cluster = await clus.findById(req.params.id).session(session);

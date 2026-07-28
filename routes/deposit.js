@@ -1,25 +1,9 @@
 import express from "express";
-import mongoose from "mongoose";
 import { notify } from "../lib/notify.js";
 import { broadcastBalanceUpdate } from "../lib/sse.js";
+import { ensureUserRecord, getDefaultAccounts, getUsersCollection } from "../lib/user-account.js";
 
 const depositRouter = express.Router();
-const Users = mongoose.connection.collection("users");
-
-const getDefaultAccounts = () => ({
-  demo: {
-    balance: 10000,
-    currency: "USD",
-    transactions: [],
-    updatedAt: new Date(),
-  },
-  real: {
-    balance: 0,
-    currency: "USD",
-    transactions: [],
-    updatedAt: new Date(),
-  },
-});
 
 depositRouter.post("/deposit", async (req, res) => {
   try {
@@ -29,11 +13,10 @@ depositRouter.post("/deposit", async (req, res) => {
       return res.status(400).json({ message: "Invalid deposit data" });
     }
 
-    const user = await Users.findOne({ clerkId });
-
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
+    const Users = getUsersCollection();
+    // Auto-creates the wallet document on first use instead of 404ing — the Clerk webhook that
+    // normally seeds this record can miss a user (misconfigured, or the account predates it).
+    const user = await ensureUserRecord(String(clerkId));
 
     const accounts = user.accounts || getDefaultAccounts();
     const currentRealAccount = accounts.real || getDefaultAccounts().real;

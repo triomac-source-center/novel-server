@@ -1,11 +1,9 @@
 import express from "express";
-import mongoose from "mongoose";
 import { notify } from "../lib/notify.js";
 import { broadcastBalanceUpdate } from "../lib/sse.js";
+import { ensureUserRecord, getUsersCollection } from "../lib/user-account.js";
 
 const withdrawRouter = express.Router();
-
-const getUsersCollection = () => mongoose.connection.collection("users");
 
 withdrawRouter.post("/withdraw", async (req, res) => {
   try {
@@ -21,11 +19,10 @@ withdrawRouter.post("/withdraw", async (req, res) => {
     }
 
     const Users = getUsersCollection();
-    const user = await Users.findOne({ clerkId });
-
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
+    // Auto-creates the wallet document on first use instead of 404ing (see deposit.js) — a
+    // freshly-created record has a real balance of $0, so the insufficient-balance check below
+    // still correctly rejects a withdrawal for a user with nothing deposited yet.
+    const user = await ensureUserRecord(String(clerkId));
 
     const realAccount = user.accounts?.real || { balance: user.wallet?.balance ?? 0, transactions: [] };
     const currentBalance = Number(realAccount.balance ?? 0);
