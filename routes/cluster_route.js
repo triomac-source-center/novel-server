@@ -183,17 +183,13 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
       const selected = available.slice(0, quantity);
       const systemRate = Number(cluster.systemShareRate ?? SYSTEM_SHARE_RATE);
       const ownerPayments = new Map();
-      let systemFeeThisRound = 0;
-      // The system takes its cut on every layer, not just the first: a fresh (unowned) cell is
-      // new capital entering the cluster with no seller to pay, so the system's 16% comes off the
-      // top of the full price; a cell bought from an existing owner pays that owner 84% of the
-      // current price, with the system taking 16% of the transfer too.
+      // Sellers are paid the full current-layer price on every transfer — the system's 16% is not
+      // nibbled off each individual movement. It's taken once, in a single lump sum, when the
+      // whole layer finishes filling (see below), computed on that layer's total value.
       for (const cell of selected) {
-        systemFeeThisRound += price * systemRate;
         if (!cell.ownerClerkId) continue;
-        const sellerPayout = price * (1 - systemRate);
         const existing = ownerPayments.get(cell.ownerClerkId) || { amount: 0, costBasis: 0, cells: 0 };
-        existing.amount += sellerPayout;
+        existing.amount += price;
         existing.costBasis += Number(cell.acquiredPrice || 0);
         existing.cells += 1;
         ownerPayments.set(cell.ownerClerkId, existing);
@@ -226,13 +222,18 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
       const history = cluster.layerHistory.find((item) => item.layer === cluster.currentLayer);
       if (history) history.filledCells = cluster.holderPoint;
 
-      cluster.systemReserve = Number(cluster.systemReserve || 0) + systemFeeThisRound;
-      cluster.recette = cluster.systemReserve;
-      pushActivity(cluster, { type: "system_fee", amount: systemFeeThisRound, cells: quantity, layer: investedLayer });
-
       let layerAdvanced = false, closed = false;
       if (cluster.holderRemain === 0) {
         if (history) history.completedAt = new Date();
+
+        // The system's 16% is taken exactly once here, on the layer's full value (cell count x
+        // this layer's price) — not accumulated per individual purchase.
+        const layerValue = Number(cluster.expVolume) * price;
+        const layerFee = layerValue * systemRate;
+        cluster.systemReserve = Number(cluster.systemReserve || 0) + layerFee;
+        cluster.recette = cluster.systemReserve;
+        pushActivity(cluster, { type: "system_fee", amount: layerFee, cells: cluster.expVolume, layer: investedLayer });
+
         if (cluster.currentLayer >= cluster.maxLayers) {
           cluster.status = "closed";
           cluster.closedAt = new Date();
