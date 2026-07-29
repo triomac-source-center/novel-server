@@ -181,11 +181,19 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
       broadcastBalanceUpdate(String(clerkId), { balance: investorAccount.balance, accountType: "real" });
 
       const selected = available.slice(0, quantity);
+      const systemRate = Number(cluster.systemShareRate ?? SYSTEM_SHARE_RATE);
       const ownerPayments = new Map();
+      let systemFeeThisRound = 0;
+      // The system takes its cut on every layer, not just the first: a fresh (unowned) cell is
+      // new capital entering the cluster with no seller to pay, so the system's 16% comes off the
+      // top of the full price; a cell bought from an existing owner pays that owner 84% of the
+      // current price, with the system taking 16% of the transfer too.
       for (const cell of selected) {
+        systemFeeThisRound += price * systemRate;
         if (!cell.ownerClerkId) continue;
+        const sellerPayout = price * (1 - systemRate);
         const existing = ownerPayments.get(cell.ownerClerkId) || { amount: 0, costBasis: 0, cells: 0 };
-        existing.amount += price;
+        existing.amount += sellerPayout;
         existing.costBasis += Number(cell.acquiredPrice || 0);
         existing.cells += 1;
         ownerPayments.set(cell.ownerClerkId, existing);
@@ -217,7 +225,10 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
       cluster.holders.push({ clerkId, cells: quantity, amount: total, investedAt: new Date() });
       const history = cluster.layerHistory.find((item) => item.layer === cluster.currentLayer);
       if (history) history.filledCells = cluster.holderPoint;
-      if (cluster.currentLayer === 1) { const systemFee = total * Number(cluster.systemShareRate ?? SYSTEM_SHARE_RATE); cluster.systemReserve = Number(cluster.systemReserve || 0) + systemFee; cluster.recette = cluster.systemReserve; }
+
+      cluster.systemReserve = Number(cluster.systemReserve || 0) + systemFeeThisRound;
+      cluster.recette = cluster.systemReserve;
+      pushActivity(cluster, { type: "system_fee", amount: systemFeeThisRound, cells: quantity, layer: investedLayer });
 
       let layerAdvanced = false, closed = false;
       if (cluster.holderRemain === 0) {
