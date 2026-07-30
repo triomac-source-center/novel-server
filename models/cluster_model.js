@@ -36,6 +36,8 @@ const ActivityLogSchema = new Schema(
     cells: { type: Number, default: 0 },
     amount: { type: Number, default: 0 },
     costBasis: { type: Number, default: 0 },
+    grossAmount: { type: Number, default: 0 },
+    fee: { type: Number, default: 0 },
     layer: { type: Number, default: 1 },
     createdAt: { type: Date, default: Date.now },
   },

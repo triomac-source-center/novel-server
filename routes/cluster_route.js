@@ -79,6 +79,8 @@ async function creditOwner(Users, clerkId, amount, description, session, meta = 
       clusterSymbol: meta.clusterSymbol ?? null,
       layer: meta.layer ?? null,
       costBasis: meta.costBasis ?? 0,
+      grossAmount: meta.grossAmount ?? amount,
+      fee: meta.fee ?? 0,
       createdAt: new Date(),
     },
     session
@@ -183,33 +185,49 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
       const selected = available.slice(0, quantity);
       const systemRate = Number(cluster.systemShareRate ?? SYSTEM_SHARE_RATE);
       const ownerPayments = new Map();
-      // Sellers are paid the full current-layer price on every transfer — the system's 16% is not
-      // nibbled off each individual movement. It's taken once, in a single lump sum, when the
-      // whole layer finishes filling (see below), computed on that layer's total value.
       for (const cell of selected) {
         if (!cell.ownerClerkId) continue;
-        const existing = ownerPayments.get(cell.ownerClerkId) || { amount: 0, costBasis: 0, cells: 0 };
-        existing.amount += price;
+        const existing = ownerPayments.get(cell.ownerClerkId) || { grossAmount: 0, costBasis: 0, cells: 0 };
+        existing.grossAmount += price;
         existing.costBasis += Number(cell.acquiredPrice || 0);
         existing.cells += 1;
         ownerPayments.set(cell.ownerClerkId, existing);
       }
+      // The system takes 16% of the PROFIT on every transfer (sale price minus what the seller
+      // originally paid), not a cut of the full sale amount and not a lump sum deferred to layer
+      // completion. The seller always keeps their cost basis back in full, plus 84% of the gain.
+      let transferFeeTotal = 0;
+      let transferredCells = 0;
       for (const [ownerClerkId, payment] of ownerPayments) {
-        await creditOwner(Users, ownerClerkId, payment.amount, `Cell transferred in ${cluster.symbol}, layer ${cluster.currentLayer}`, session, {
+        const profit = payment.grossAmount - payment.costBasis;
+        const fee = profit > 0 ? profit * systemRate : 0;
+        const netAmount = payment.grossAmount - fee;
+        transferFeeTotal += fee;
+        transferredCells += payment.cells;
+        await creditOwner(Users, ownerClerkId, netAmount, `Cell transferred in ${cluster.symbol}, layer ${cluster.currentLayer}`, session, {
           clusterId: String(cluster._id),
           clusterSymbol: cluster.symbol,
           layer: investedLayer,
           costBasis: payment.costBasis,
+          grossAmount: payment.grossAmount,
+          fee,
         });
         pushActivity(cluster, {
           type: "transfer",
           clerkId: ownerClerkId,
           counterpartyClerkId: clerkId,
           cells: payment.cells,
-          amount: payment.amount,
+          amount: netAmount,
+          grossAmount: payment.grossAmount,
           costBasis: payment.costBasis,
+          fee,
           layer: investedLayer,
         });
+      }
+      if (transferFeeTotal > 0) {
+        cluster.systemReserve = Number(cluster.systemReserve || 0) + transferFeeTotal;
+        cluster.recette = cluster.systemReserve;
+        pushActivity(cluster, { type: "system_fee", amount: transferFeeTotal, cells: transferredCells, layer: investedLayer });
       }
       for (const cell of selected) Object.assign(cell, { ownerClerkId: clerkId, acquiredLayer: cluster.currentLayer, acquiredPrice: price, acquiredAt: new Date() });
 
@@ -225,14 +243,6 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
       let layerAdvanced = false, closed = false;
       if (cluster.holderRemain === 0) {
         if (history) history.completedAt = new Date();
-
-        // The system's 16% is taken exactly once here, on the layer's full value (cell count x
-        // this layer's price) — not accumulated per individual purchase.
-        const layerValue = Number(cluster.expVolume) * price;
-        const layerFee = layerValue * systemRate;
-        cluster.systemReserve = Number(cluster.systemReserve || 0) + layerFee;
-        cluster.recette = cluster.systemReserve;
-        pushActivity(cluster, { type: "system_fee", amount: layerFee, cells: cluster.expVolume, layer: investedLayer });
 
         if (cluster.currentLayer >= cluster.maxLayers) {
           cluster.status = "closed";
