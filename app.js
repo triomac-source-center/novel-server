@@ -33,9 +33,21 @@ app.get('/', (req, res) => {
     res.json({message: "wellcome home"})
 })
 
+app.use("/api", depositRouter);
+app.use("/api", clusterRouter);
+app.use("/api", accountRouter);
+app.use("/api", withdrawRouter);
+app.use("/api", notificationsRouter);
+app.use("/api", usersRouter);
+app.use("/api/all", allClusRouter);
+
+// Generic Clerk-id lookup (used by fetchUserProfile). Registered last so it only catches
+// single-segment paths that none of the routers above already claimed — mounting it first
+// used to shadow GET /api/account and GET /api/notifications, since express matched this
+// route before ever reaching accountRouter/notificationsRouter.
 app.get("/api/:id", async (req, res) => {
   try {
-    const db = mongoose.connection.db;  
+    const db = mongoose.connection.db;
     const user = await db.collection("users").findOne({ clerkId: req.params.id });
 
     if (!user) return res.status(404).json({ message: "User not found" });
@@ -46,14 +58,6 @@ app.get("/api/:id", async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
-
-app.use("/api", depositRouter);
-app.use("/api", clusterRouter);
-app.use("/api", accountRouter);
-app.use("/api", withdrawRouter);
-app.use("/api", notificationsRouter);
-app.use("/api", usersRouter);
-app.use("/api/all", allClusRouter);
 
 
 const PORT = process.env.PORT || 8000;
