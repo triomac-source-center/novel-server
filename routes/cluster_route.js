@@ -32,6 +32,31 @@ function pushActivity(cluster, entry) {
   cluster.activityLog.push({ createdAt: new Date(), ...entry });
 }
 
+// When a layer completes, several different owners can each hold a different quantity of its
+// cells (e.g. 4/3/3 out of 10). If a buyer only wants part of what's left, cycling one cell per
+// owner in turn (instead of draining owners in raw array order) means a partial purchase still
+// pays out proportionally across everyone still holding cells that round, not just whichever
+// owner's cells happen to sit first in the array.
+function roundRobinByOwner(cells) {
+  const byOwner = new Map();
+  for (const cell of cells) {
+    const key = cell.ownerClerkId;
+    if (!byOwner.has(key)) byOwner.set(key, []);
+    byOwner.get(key).push(cell);
+  }
+  let buckets = [...byOwner.values()];
+  const result = [];
+  while (buckets.length > 0) {
+    const next = [];
+    for (const bucket of buckets) {
+      result.push(bucket.shift());
+      if (bucket.length > 0) next.push(bucket);
+    }
+    buckets = next;
+  }
+  return result;
+}
+
 function ensureCells(cluster) {
   if (Array.isArray(cluster.cells) && cluster.cells.length === Number(cluster.expVolume)) return;
   const cells = [];
@@ -152,7 +177,7 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
       const available = isFirstLayer
         ? cluster.cells.filter((cell) => !cell.ownerClerkId)
         : [
-            ...cluster.cells.filter((cell) => cell.ownerClerkId !== clerkId),
+            ...roundRobinByOwner(cluster.cells.filter((cell) => cell.ownerClerkId !== clerkId)),
             ...cluster.cells.filter((cell) => cell.ownerClerkId === clerkId),
           ];
       const maxPurchasable = Math.min(available.length, Number(cluster.holderRemain) || 0);
@@ -185,25 +210,38 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
       const selected = available.slice(0, quantity);
       const systemRate = Number(cluster.systemShareRate ?? SYSTEM_SHARE_RATE);
       const ownerPayments = new Map();
+      let freshCells = 0;
       for (const cell of selected) {
-        if (!cell.ownerClerkId) continue;
+        if (!cell.ownerClerkId) {
+          freshCells += 1;
+          continue;
+        }
         const existing = ownerPayments.get(cell.ownerClerkId) || { grossAmount: 0, costBasis: 0, cells: 0 };
         existing.grossAmount += price;
         existing.costBasis += Number(cell.acquiredPrice || 0);
         existing.cells += 1;
         ownerPayments.set(cell.ownerClerkId, existing);
       }
-      // The system takes 16% of the PROFIT on every transfer (sale price minus what the seller
-      // originally paid), not a cut of the full sale amount and not a lump sum deferred to layer
-      // completion. The seller always keeps their cost basis back in full, plus 84% of the gain.
-      let transferFeeTotal = 0;
-      let transferredCells = 0;
+      // The system owns 16% of every layer, on every cluster, full stop — not just the profit on
+      // resales. Two cases fund that reserve:
+      //  1) Fresh cells (no previous owner, i.e. layer 1): there's no seller to pay, so the system
+      //     simply keeps 16% of what the buyer paid as its cut of this layer.
+      //  2) Transferred cells (layer 2+): the seller is paid their cost basis back in full plus
+      //     84% of what they gained on the resale; the system takes 16% of that gain specifically,
+      //     computed per owner and per transfer, not deferred to layer completion.
+      let systemFeeTotal = 0;
+      let feeCells = 0;
+      if (freshCells > 0) {
+        const freshFee = freshCells * price * systemRate;
+        systemFeeTotal += freshFee;
+        feeCells += freshCells;
+      }
       for (const [ownerClerkId, payment] of ownerPayments) {
         const profit = payment.grossAmount - payment.costBasis;
         const fee = profit > 0 ? profit * systemRate : 0;
         const netAmount = payment.grossAmount - fee;
-        transferFeeTotal += fee;
-        transferredCells += payment.cells;
+        systemFeeTotal += fee;
+        feeCells += payment.cells;
         await creditOwner(Users, ownerClerkId, netAmount, `Cell transferred in ${cluster.symbol}, layer ${cluster.currentLayer}`, session, {
           clusterId: String(cluster._id),
           clusterSymbol: cluster.symbol,
@@ -224,10 +262,10 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
           layer: investedLayer,
         });
       }
-      if (transferFeeTotal > 0) {
-        cluster.systemReserve = Number(cluster.systemReserve || 0) + transferFeeTotal;
+      if (systemFeeTotal > 0) {
+        cluster.systemReserve = Number(cluster.systemReserve || 0) + systemFeeTotal;
         cluster.recette = cluster.systemReserve;
-        pushActivity(cluster, { type: "system_fee", amount: transferFeeTotal, cells: transferredCells, layer: investedLayer });
+        pushActivity(cluster, { type: "system_fee", amount: systemFeeTotal, cells: feeCells, layer: investedLayer });
       }
       for (const cell of selected) Object.assign(cell, { ownerClerkId: clerkId, acquiredLayer: cluster.currentLayer, acquiredPrice: price, acquiredAt: new Date() });
 
