@@ -181,7 +181,12 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
             ...cluster.cells.filter((cell) => cell.ownerClerkId === clerkId),
           ];
       const maxPurchasable = Math.min(available.length, Number(cluster.holderRemain) || 0);
-      if (quantity > maxPurchasable) throw new Error(`Only ${maxPurchasable} cell(s) are available in layer ${cluster.currentLayer}`);
+      // Reject the whole request outright when demand exceeds supply — never auto-fill a smaller
+      // quantity than what was asked for. Nothing is debited and no cell changes hands; the buyer
+      // has to explicitly ask again with a lower number.
+      if (quantity > maxPurchasable) {
+        throw new Error(`Purchase impossible: only ${maxPurchasable} cell(s) are available at this layer, you requested ${quantity}.`);
+      }
       const investedLayer = Number(cluster.currentLayer);
       const price = cellPrice(cluster);
       const total = quantity * price;
