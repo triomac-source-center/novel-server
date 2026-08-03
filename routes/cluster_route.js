@@ -188,10 +188,16 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
       // price). Cells owned by someone else are offered first so real payouts happen; a buyer's
       // own cells are only used as a fallback once no other investor's cells remain this round,
       // so a single tester/admin account can still progress a layer without a second account.
+      // Cells already claimed THIS layer (acquiredLayer === currentLayer) are excluded from resale
+      // until the next layer opens — otherwise a cell bought a moment ago at this layer's price
+      // could be immediately bought out again at the same price by a different buyer, producing a
+      // $0-profit "phantom flip" instead of only becoming tradeable once the price actually moves.
       const available = isFirstLayer
         ? cluster.cells.filter((cell) => !cell.ownerClerkId)
         : [
-            ...roundRobinByOwner(cluster.cells.filter((cell) => cell.ownerClerkId !== clerkId)),
+            ...roundRobinByOwner(
+              cluster.cells.filter((cell) => cell.ownerClerkId !== clerkId && cell.acquiredLayer !== cluster.currentLayer)
+            ),
             ...cluster.cells.filter((cell) => cell.ownerClerkId === clerkId),
           ];
       const maxPurchasable = Math.min(available.length, Number(cluster.holderRemain) || 0);
