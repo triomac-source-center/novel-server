@@ -247,15 +247,16 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
         existing.cells += 1;
         ownerPayments.set(cell.ownerClerkId, existing);
       }
-      // The system owns 16% of every layer, on every cluster, full stop — computed on the FULL sale
-      // amount of every cell that changes hands, not just the profit margin. Two cases fund that
-      // reserve:
-      //  1) Fresh cells (no previous owner, i.e. layer 1): there's no seller to pay, so the system
-      //     keeps 16% of what the buyer paid as its cut of this layer.
-      //  2) Transferred cells (layer 2+): the seller receives 84% of the sale price (what they
-      //     originally paid is their own cost, not reimbursed separately); the system takes 16% of
-      //     the full sale amount, computed per owner and per transfer, not deferred to layer
-      //     completion.
+      // The system owns 16% of every layer, on every cluster, full stop — but computed on the
+      // PROFIT margin of each transfer, not the full sale amount (taking 16% of the whole sale
+      // amount was tried and reverted: on a thin margin relative to the original cost, it could eat
+      // most of the actual gain — e.g. a $340 profit on a $1,560 sale lost $249.60 to fees, 73% of
+      // the profit, not 16%). Two cases fund that reserve:
+      //  1) Fresh cells (no previous owner, i.e. layer 1): there's no seller/cost-basis to net
+      //     against, so the system keeps 16% of what the buyer paid as its cut of this layer.
+      //  2) Transferred cells (layer 2+): the seller is paid their cost basis back in full plus 84%
+      //     of what they gained on the resale; the system takes 16% of that gain specifically,
+      //     computed per owner and per transfer, not deferred to layer completion.
       let systemFeeTotal = 0;
       let feeCells = 0;
       if (freshCells > 0) {
@@ -264,7 +265,8 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
         feeCells += freshCells;
       }
       for (const [ownerClerkId, payment] of ownerPayments) {
-        const fee = payment.grossAmount * systemRate;
+        const profit = payment.grossAmount - payment.costBasis;
+        const fee = profit > 0 ? profit * systemRate : 0;
         const netAmount = payment.grossAmount - fee;
         systemFeeTotal += fee;
         feeCells += payment.cells;
