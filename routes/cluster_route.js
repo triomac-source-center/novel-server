@@ -247,13 +247,15 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
         existing.cells += 1;
         ownerPayments.set(cell.ownerClerkId, existing);
       }
-      // The system owns 16% of every layer, on every cluster, full stop — not just the profit on
-      // resales. Two cases fund that reserve:
+      // The system owns 16% of every layer, on every cluster, full stop — computed on the FULL sale
+      // amount of every cell that changes hands, not just the profit margin. Two cases fund that
+      // reserve:
       //  1) Fresh cells (no previous owner, i.e. layer 1): there's no seller to pay, so the system
-      //     simply keeps 16% of what the buyer paid as its cut of this layer.
-      //  2) Transferred cells (layer 2+): the seller is paid their cost basis back in full plus
-      //     84% of what they gained on the resale; the system takes 16% of that gain specifically,
-      //     computed per owner and per transfer, not deferred to layer completion.
+      //     keeps 16% of what the buyer paid as its cut of this layer.
+      //  2) Transferred cells (layer 2+): the seller receives 84% of the sale price (what they
+      //     originally paid is their own cost, not reimbursed separately); the system takes 16% of
+      //     the full sale amount, computed per owner and per transfer, not deferred to layer
+      //     completion.
       let systemFeeTotal = 0;
       let feeCells = 0;
       if (freshCells > 0) {
@@ -262,8 +264,7 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
         feeCells += freshCells;
       }
       for (const [ownerClerkId, payment] of ownerPayments) {
-        const profit = payment.grossAmount - payment.costBasis;
-        const fee = profit > 0 ? profit * systemRate : 0;
+        const fee = payment.grossAmount * systemRate;
         const netAmount = payment.grossAmount - fee;
         systemFeeTotal += fee;
         feeCells += payment.cells;
