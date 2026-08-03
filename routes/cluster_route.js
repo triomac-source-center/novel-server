@@ -32,6 +32,20 @@ function pushActivity(cluster, entry) {
   cluster.activityLog.push({ createdAt: new Date(), ...entry });
 }
 
+// Records a cell changing hands (first purchase or a later transfer) in its own ownershipHistory
+// instead of just overwriting the current-owner fields — closes the previous owner's entry
+// (releasedAt) if there was one, then appends the new owner's entry. The current-state fields
+// (ownerClerkId, acquiredLayer, acquiredPrice, acquiredAt) are kept in sync exactly as before, so
+// every existing read of those fields is unaffected.
+function recordCellAcquisition(cell, clerkId, layer, price, at) {
+  if (!Array.isArray(cell.ownershipHistory)) cell.ownershipHistory = [];
+  for (const entry of cell.ownershipHistory) {
+    if (!entry.releasedAt) entry.releasedAt = at;
+  }
+  cell.ownershipHistory.push({ clerkId, layer, price, acquiredAt: at, releasedAt: null });
+  Object.assign(cell, { ownerClerkId: clerkId, acquiredLayer: layer, acquiredPrice: price, acquiredAt: at });
+}
+
 // When a layer completes, several different owners can each hold a different quantity of its
 // cells (e.g. 4/3/3 out of 10). If a buyer only wants part of what's left, cycling one cell per
 // owner in turn (instead of draining owners in raw array order) means a partial purchase still
@@ -272,7 +286,8 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
         cluster.recette = cluster.systemReserve;
         pushActivity(cluster, { type: "system_fee", amount: systemFeeTotal, cells: feeCells, layer: investedLayer });
       }
-      for (const cell of selected) Object.assign(cell, { ownerClerkId: clerkId, acquiredLayer: cluster.currentLayer, acquiredPrice: price, acquiredAt: new Date() });
+      const acquiredAt = new Date();
+      for (const cell of selected) recordCellAcquisition(cell, clerkId, cluster.currentLayer, price, acquiredAt);
 
       pushActivity(cluster, { type: "invest", clerkId, cells: quantity, amount: total, layer: investedLayer });
 

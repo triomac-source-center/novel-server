@@ -2,6 +2,21 @@ import mongoose from "mongoose";
 
 const { Schema } = mongoose;
 
+// Full chain of custody for a cell: one entry per owner, in order. The current owner's entry has
+// releasedAt: null; every prior entry gets releasedAt set the moment the cell changes hands. This
+// is what lets a cell's exact acquisition price/layer be audited at any point in its history, not
+// just its current state.
+const CellOwnershipEntrySchema = new Schema(
+  {
+    clerkId: { type: String, required: true },
+    layer: { type: Number, required: true },
+    price: { type: Number, required: true },
+    acquiredAt: { type: Date, default: Date.now },
+    releasedAt: { type: Date, default: null },
+  },
+  { _id: false }
+);
+
 const CellSchema = new Schema(
   {
     number: { type: Number, required: true },
@@ -9,6 +24,7 @@ const CellSchema = new Schema(
     acquiredLayer: { type: Number, default: 0 },
     acquiredPrice: { type: Number, default: 0 },
     acquiredAt: { type: Date, default: null },
+    ownershipHistory: { type: [CellOwnershipEntrySchema], default: [] },
   },
   { _id: false }
 );
