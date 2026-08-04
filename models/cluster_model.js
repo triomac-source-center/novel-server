@@ -44,7 +44,7 @@ const ActivityLogSchema = new Schema(
   {
     type: {
       type: String,
-      enum: ["created", "published", "closed", "invest", "transfer", "layer_advance", "system_fee"],
+      enum: ["created", "published", "closed", "invest", "transfer", "layer_advance", "system_fee", "block_sale", "block_payout"],
       required: true,
     },
     clerkId: { type: String, default: null },

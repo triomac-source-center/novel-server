@@ -1,6 +1,7 @@
 import express from "express";
 import mongoose from "mongoose";
 import clus from "../models/cluster_model.js";
+import AuthorshipBlock from "../models/authorship_block_model.js";
 import { notify } from "../lib/notify.js";
 import { broadcastBalanceUpdate } from "../lib/sse.js";
 import { ensureUserRecord } from "../lib/user-account.js";
@@ -109,7 +110,7 @@ async function creditOwner(Users, clerkId, amount, description, session, meta = 
     account,
     {
       type: "credit",
-      category: "investment",
+      category: meta.category ?? "investment",
       amount,
       balanceBefore: before,
       balanceAfter: account.balance,
@@ -158,6 +159,23 @@ clusterRouter.post("/clusters", async (req, res) => {
       systemShareRate: SYSTEM_SHARE_RATE,
       systemReserve: 0,
     });
+
+    // One Authorship Block per layer, precomputed from the fixed price schedule: layer 1 has no
+    // seller (fresh sale, full gross taxed), every layer after that only taxes the profit margin,
+    // which is a constant `layerStep` per cell under normal one-transfer-per-layer trading.
+    const blockDocs = [];
+    for (let layer = 1; layer <= layers; layer += 1) {
+      const expectedShareAmount = layer === 1 ? count * value * SYSTEM_SHARE_RATE : count * step * SYSTEM_SHARE_RATE;
+      blockDocs.push({
+        clusterId: cluster._id,
+        clusterSymbol: cluster.symbol,
+        layer,
+        expectedShareAmount,
+        originalPrice: expectedShareAmount / 2,
+      });
+    }
+    await AuthorshipBlock.insertMany(blockDocs);
+
     await notify({ clerkId, type: "cluster_created", title: "Cluster created (draft)", message: `${cluster.symbol} was created as a draft. Publish it to open it for investment.`, relatedId: String(cluster._id) });
     return res.status(201).json({ success: true, data: cluster });
   } catch (error) {
@@ -291,9 +309,28 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
         });
       }
       if (systemFeeTotal > 0) {
-        cluster.systemReserve = Number(cluster.systemReserve || 0) + systemFeeTotal;
-        cluster.recette = cluster.systemReserve;
-        pushActivity(cluster, { type: "system_fee", amount: systemFeeTotal, cells: feeCells, layer: investedLayer });
+        // If someone pre-bought this exact cluster+layer's future system share as an Authorship
+        // Block, the system was already paid (at half price, at block-purchase time) — so this
+        // layer's real fee is redirected to the block owner instead of the system, in full, and
+        // does NOT also add to systemReserve (that would double-count the same revenue).
+        const block = await AuthorshipBlock.findOne({ clusterId: cluster._id, layer: investedLayer, status: { $in: ["sold", "paid_out"] } }).session(session);
+        if (block && block.ownerClerkId) {
+          await creditOwner(Users, block.ownerClerkId, systemFeeTotal, `Authorship block payout: ${cluster.symbol} layer ${investedLayer}`, session, {
+            clusterId: String(cluster._id),
+            clusterSymbol: cluster.symbol,
+            layer: investedLayer,
+            category: "block",
+          });
+          block.paidOutAmount = Number(block.paidOutAmount || 0) + systemFeeTotal;
+          block.status = "paid_out";
+          block.paidOutAt = block.paidOutAt || new Date();
+          await block.save({ session });
+          pushActivity(cluster, { type: "block_payout", clerkId: block.ownerClerkId, amount: systemFeeTotal, cells: feeCells, layer: investedLayer });
+        } else {
+          cluster.systemReserve = Number(cluster.systemReserve || 0) + systemFeeTotal;
+          cluster.recette = cluster.systemReserve;
+          pushActivity(cluster, { type: "system_fee", amount: systemFeeTotal, cells: feeCells, layer: investedLayer });
+        }
       }
       const acquiredAt = new Date();
       for (const cell of selected) recordCellAcquisition(cell, clerkId, cluster.currentLayer, price, acquiredAt);
@@ -385,6 +422,9 @@ clusterRouter.delete("/clusters/:id", async (req, res) => {
     if (!isAdmin(clerkId, adminCode)) return res.status(403).json({ success: false, error: "Only the triomac60 administrator or a valid admin code can delete clusters" });
     const cluster = await clus.findByIdAndDelete(req.params.id);
     if (!cluster) return res.status(404).json({ success: false, error: "Cluster not found" });
+    // Otherwise these would be orphaned, pointing at a cluster that no longer exists (same "no
+    // refund" stance as a cluster that closes without reaching a layer — see block payout logic).
+    await AuthorshipBlock.deleteMany({ clusterId: cluster._id });
     return res.status(200).json({ success: true, data: { _id: req.params.id } });
   } catch (error) {
     console.error("Delete cluster error:", error);
@@ -397,6 +437,7 @@ clusterRouter.delete("/clusters", async (req, res) => {
     const { clerkId, adminCode } = req.body;
     if (!isAdmin(clerkId, adminCode)) return res.status(403).json({ success: false, error: "Only the triomac60 administrator or a valid admin code can delete clusters" });
     const result = await clus.deleteMany({});
+    await AuthorshipBlock.deleteMany({});
     return res.status(200).json({ success: true, deletedCount: result.deletedCount });
   } catch (error) {
     console.error("Delete all clusters error:", error);
