@@ -293,7 +293,13 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
         const netAmount = payment.grossAmount - fee;
         systemFeeTotal += fee;
         feeCells += payment.cells;
-        await creditOwner(Users, ownerClerkId, netAmount, `Cell transferred in ${cluster.symbol}, layer ${cluster.currentLayer}`, session, {
+        // Credit only the REALIZED GAIN (netAmount minus the seller's own cost basis) — not the
+        // full sale proceeds. Buying a cell no longer debits the balance (see the purchase debit
+        // above: balanceAfter === balanceBefore), so the cost basis was never removed from balance
+        // in the first place; crediting the full netAmount back would double-count it on top of the
+        // gain the seller actually made.
+        const netGain = netAmount - payment.costBasis;
+        await creditOwner(Users, ownerClerkId, netGain, `Cell transferred in ${cluster.symbol}, layer ${cluster.currentLayer}`, session, {
           clusterId: String(cluster._id),
           clusterSymbol: cluster.symbol,
           layer: investedLayer,
@@ -320,10 +326,22 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
         // does NOT also add to systemReserve (that would double-count the same revenue).
         const block = await AuthorshipBlock.findOne({ clusterId: cluster._id, layer: investedLayer, status: { $in: ["sold", "paid_out"] } }).session(session);
         if (block && block.ownerClerkId) {
-          await creditOwner(Users, block.ownerClerkId, systemFeeTotal, `Authorship block payout: ${cluster.symbol} layer ${investedLayer}`, session, {
+          // Same principle as the cell transfer above: buying the block never touched balance, so
+          // only the portion above what the current owner paid for it is a real gain. If the layer
+          // fills across several separate purchases, this block's payout can arrive in more than
+          // one installment — the cost basis is only subtracted from the FIRST one; the rest is
+          // pure gain (it's already been accounted for).
+          const isFirstPayout = Number(block.paidOutAmount || 0) === 0;
+          const blockCostBasis = isFirstPayout
+            ? Number((block.ownershipHistory || []).find((entry) => !entry.releasedAt)?.price ?? 0)
+            : 0;
+          const netGain = systemFeeTotal - blockCostBasis;
+          await creditOwner(Users, block.ownerClerkId, netGain, `Authorship block payout: ${cluster.symbol} layer ${investedLayer}`, session, {
             clusterId: String(cluster._id),
             clusterSymbol: cluster.symbol,
             layer: investedLayer,
+            costBasis: blockCostBasis,
+            grossAmount: systemFeeTotal,
             category: "block",
           });
           block.paidOutAmount = Number(block.paidOutAmount || 0) + systemFeeTotal;
