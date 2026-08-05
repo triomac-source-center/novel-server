@@ -11,6 +11,7 @@ import withdrawRouter from './routes/withdraw.js'
 import notificationsRouter from './routes/notifications.js'
 import usersRouter from './routes/users.js'
 import blockRouter from './routes/authorship_block_route.js'
+import adminResetRouter from './routes/admin_reset_route.js'
 
 let app = express()
 dotenv.config()
@@ -41,6 +42,7 @@ app.use("/api", withdrawRouter);
 app.use("/api", notificationsRouter);
 app.use("/api", usersRouter);
 app.use("/api", blockRouter);
+app.use("/api", adminResetRouter);
 app.use("/api/all", allClusRouter);
 
 // Generic Clerk-id lookup (used by fetchUserProfile). Registered last so it only catches

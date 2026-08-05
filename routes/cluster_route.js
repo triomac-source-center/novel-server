@@ -6,6 +6,7 @@ import { notify } from "../lib/notify.js";
 import { broadcastBalanceUpdate } from "../lib/sse.js";
 import { ensureUserRecord } from "../lib/user-account.js";
 import { computeCommittedFunds } from "../lib/available-funds.js";
+import { isAdmin } from "../lib/admin.js";
 
 const clusterRouter = express.Router();
 const SYSTEM_NAME = "triomac60";
@@ -19,15 +20,6 @@ function generateSignature() {
 
 function cellPrice(cluster) {
   return Number(cluster.entryPoint) + (Number(cluster.currentLayer || 1) - 1) * Number(cluster.layerStep || 0);
-}
-
-const FALLBACK_ADMIN_CODE = "larson477";
-
-function isAdmin(clerkId, adminCode) {
-  const matchesClerkId = Boolean(process.env.TRIOMAC60_ADMIN_CLERK_ID) && clerkId === process.env.TRIOMAC60_ADMIN_CLERK_ID;
-  const expectedCode = process.env.TRIOMAC60_ADMIN_CODE || FALLBACK_ADMIN_CODE;
-  const matchesCode = Boolean(adminCode) && adminCode === expectedCode;
-  return matchesClerkId || matchesCode;
 }
 
 function pushActivity(cluster, entry) {
