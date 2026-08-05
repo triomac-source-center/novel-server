@@ -5,6 +5,7 @@ import AuthorshipBlock from "../models/authorship_block_model.js";
 import { notify } from "../lib/notify.js";
 import { broadcastBalanceUpdate } from "../lib/sse.js";
 import { ensureUserRecord } from "../lib/user-account.js";
+import { computeCommittedFunds } from "../lib/available-funds.js";
 
 const clusterRouter = express.Router();
 const SYSTEM_NAME = "triomac60";
@@ -233,14 +234,19 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
       if (!investor) throw new Error("Investor account not found");
       const investorAccount = accountFor(investor);
       const before = Number(investorAccount.balance || 0);
-      if (before < total) throw new Error("Insufficient real account balance");
-      investorAccount.balance = before - total;
+      // MT5-style: Balance never moves on a purchase — only when a profit is actually realized
+      // (see creditOwner below). What CAN'T happen is spending money already committed to other
+      // still-open positions, so the affordability check is against available funds (balance minus
+      // the cost basis of everything currently held), not the raw balance field.
+      const committed = await computeCommittedFunds(clerkId, session);
+      const availableFunds = before - committed;
+      if (availableFunds < total) throw new Error("Insufficient available funds (balance minus your currently open positions).");
       const debit = {
         type: "debit",
         category: "investment",
         amount: total,
         balanceBefore: before,
-        balanceAfter: investorAccount.balance,
+        balanceAfter: before,
         description: `Layer ${cluster.currentLayer}: ${quantity} cell(s) in ${cluster.symbol}`,
         clusterId: String(cluster._id),
         clusterSymbol: cluster.symbol,
@@ -248,7 +254,6 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
         createdAt: new Date(),
       };
       await writeAccount(Users, clerkId, investor, investorAccount, debit, session);
-      broadcastBalanceUpdate(String(clerkId), { balance: investorAccount.balance, accountType: "real" });
 
       const selected = available.slice(0, quantity);
       const systemRate = Number(cluster.systemShareRate ?? SYSTEM_SHARE_RATE);

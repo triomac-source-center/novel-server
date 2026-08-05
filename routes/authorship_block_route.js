@@ -5,6 +5,7 @@ import clus from "../models/cluster_model.js";
 import { notify } from "../lib/notify.js";
 import { broadcastBalanceUpdate } from "../lib/sse.js";
 import { ensureUserRecord, getUsersCollection } from "../lib/user-account.js";
+import { computeCommittedFunds } from "../lib/available-funds.js";
 
 const blockRouter = express.Router();
 
@@ -54,7 +55,7 @@ async function creditOwner(Users, clerkId, amount, description, session, meta = 
 // callers pass ?all=true to see blocks for draft clusters as well.
 blockRouter.get("/blocks", async (req, res) => {
   try {
-    const { status, clusterId, all } = req.query;
+    const { status, clusterId, ownerClerkId, all } = req.query;
     const filter = {};
 
     if (all !== "true") {
@@ -63,6 +64,7 @@ blockRouter.get("/blocks", async (req, res) => {
     }
     if (clusterId) filter.clusterId = clusterId;
     if (status && status !== "all") filter.status = status;
+    if (ownerClerkId) filter.ownerClerkId = ownerClerkId;
 
     const blocks = await AuthorshipBlock.find(filter).sort({ clusterId: 1, layer: 1 });
     return res.status(200).json({ success: true, count: blocks.length, data: blocks });
@@ -101,7 +103,12 @@ blockRouter.post("/blocks/buy", async (req, res) => {
       if (!buyer) throw new Error("Buyer account not found");
       const buyerAccount = accountFor(buyer);
       const balanceBefore = Number(buyerAccount.balance || 0);
-      let runningBalance = balanceBefore;
+      // MT5-style: Balance is untouched by a purchase. Affordability is checked against available
+      // funds (balance minus everything already committed to currently-open positions), decremented
+      // locally as this loop "spends" more within the same multi-block purchase.
+      const committed = await computeCommittedFunds(clerkId, session);
+      let remainingAvailable = balanceBefore - committed;
+      let totalSpent = 0;
       const purchased = [];
 
       for (const blockId of blockIds) {
@@ -113,8 +120,9 @@ blockRouter.post("/blocks/buy", async (req, res) => {
         if (isResale && block.ownerClerkId === clerkId) throw new Error("You already own this block");
 
         const price = isInitialSale ? block.originalPrice : Number(block.resalePrice);
-        if (runningBalance < price) throw new Error("Insufficient real account balance");
-        runningBalance -= price;
+        if (remainingAvailable < price) throw new Error("Insufficient available funds (balance minus your currently open positions).");
+        remainingAvailable -= price;
+        totalSpent += price;
 
         if (isInitialSale) {
           const cluster = await clus.findById(block.clusterId).session(session);
@@ -145,19 +153,19 @@ blockRouter.post("/blocks/buy", async (req, res) => {
         purchased.push(block);
       }
 
-      const debit = {
-        type: "debit",
-        category: "block",
-        amount: balanceBefore - runningBalance,
-        balanceBefore,
-        balanceAfter: runningBalance,
-        description: `Purchased ${purchased.length} authorship block(s)`,
-        createdAt: new Date(),
-      };
-      buyerAccount.balance = runningBalance;
-      await writeAccount(Users, clerkId, buyer, buyerAccount, debit, session);
-      broadcastBalanceUpdate(String(clerkId), { balance: runningBalance, accountType: "real" });
-      response = { blocks: purchased, balance: runningBalance };
+      if (totalSpent > 0) {
+        const debit = {
+          type: "debit",
+          category: "block",
+          amount: totalSpent,
+          balanceBefore,
+          balanceAfter: balanceBefore,
+          description: `Purchased ${purchased.length} authorship block(s)`,
+          createdAt: new Date(),
+        };
+        await writeAccount(Users, clerkId, buyer, buyerAccount, debit, session);
+      }
+      response = { blocks: purchased, balance: balanceBefore };
     });
 
     await notify({
