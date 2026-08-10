@@ -12,6 +12,13 @@ const DepositSchema = new Schema({
   address: { type: String, required: true },
   status: { type: String, enum: ["confirmed"], default: "confirmed" },
   creditedAt: { type: Date, default: Date.now },
+
+  // On-chain sweep to the consolidated hot wallet — a separate step from crediting the user's
+  // internal balance above, tracked independently.
+  sweepStatus: { type: String, enum: ["pending", "funded", "swept", "failed"], default: "pending", index: true },
+  fundingTxid: { type: String, default: null }, // TRX sent from the hot wallet to cover this address's gas
+  sweepTxid: { type: String, default: null }, // USDT transfer from this address to the hot wallet
+  sweepAttempts: { type: Number, default: 0 },
 });
 
 const Deposit = mongoose.model("deposits", DepositSchema);
