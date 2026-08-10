@@ -1,11 +1,29 @@
 import express from "express";
 import DepositAddress from "../models/deposit_address_model.js";
+import Deposit from "../models/deposit_model.js";
 import { deriveTronAccount } from "../lib/tron-wallet.js";
 import { getNextDerivationIndex } from "../lib/deposit-index-service.js";
 import { runDepositDetection } from "../lib/deposit-detection.js";
 import { isAdmin } from "../lib/admin.js";
 
 const walletDepositRouter = express.Router();
+
+// TEMPORARY — admin-gated read-only listing, to inspect what's actually in the database instead
+// of relying on conversational memory of which test address was used for what. Removed again
+// right after use.
+walletDepositRouter.get("/admin/deposit-debug", async (req, res) => {
+  try {
+    const { adminCode } = req.query;
+    if (!isAdmin(null, adminCode)) {
+      return res.status(403).json({ success: false, error: "Invalid admin code" });
+    }
+    const [addresses, deposits] = await Promise.all([DepositAddress.find({}), Deposit.find({})]);
+    return res.status(200).json({ success: true, data: { addresses, deposits } });
+  } catch (error) {
+    console.error("Deposit debug error:", error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 // TEMPORARY — admin-gated trigger to verify detect-deposits.js end-to-end against a real testnet
 // transfer without needing shell access to the running server. Will be removed again once
