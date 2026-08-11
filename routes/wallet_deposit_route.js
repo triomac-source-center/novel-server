@@ -1,4 +1,5 @@
 import express from "express";
+import mongoose from "mongoose";
 import DepositAddress from "../models/deposit_address_model.js";
 import { deriveTronAccount } from "../lib/tron-wallet.js";
 import { getNextDerivationIndex } from "../lib/deposit-index-service.js";
@@ -35,6 +36,31 @@ walletDepositRouter.get("/wallet/deposit-address", async (req, res) => {
     console.error("Deposit address error:", error);
     return res.status(500).json({ success: false, error: error.message });
   }
+});
+
+// TEMPORARY — read-only diagnostic (no state change, no secrets exposed) to re-confirm MongoDB
+// connectivity after adding MONGO_UI to Doppler. Will be reverted right after use.
+walletDepositRouter.get("/admin/debug-mongo", async (req, res) => {
+  const readyStateNames = ["disconnected", "connected", "connecting", "disconnecting"];
+  const info = {
+    readyState: mongoose.connection.readyState,
+    readyStateName: readyStateNames[mongoose.connection.readyState] ?? "unknown",
+    host: mongoose.connection.host ?? null,
+    name: mongoose.connection.name ?? null,
+    mongoUiSet: Boolean(process.env.MONGO_UI),
+  };
+
+  try {
+    const pingResult = await Promise.race([
+      mongoose.connection.db?.admin().ping(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("ping timed out after 5000ms")), 5000)),
+    ]);
+    info.ping = pingResult ? "ok" : "no db handle available";
+  } catch (error) {
+    info.ping = `failed: ${error.message}`;
+  }
+
+  return res.status(200).json(info);
 });
 
 export default walletDepositRouter;
