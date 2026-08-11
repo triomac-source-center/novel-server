@@ -4,6 +4,7 @@ import Deposit from "../models/deposit_model.js";
 import { deriveTronAccount } from "../lib/tron-wallet.js";
 import { getNextDerivationIndex } from "../lib/deposit-index-service.js";
 import { runDepositDetection } from "../lib/deposit-detection.js";
+import { runDepositSweep } from "../lib/deposit-sweep.js";
 import { isAdmin } from "../lib/admin.js";
 
 const walletDepositRouter = express.Router();
@@ -38,6 +39,24 @@ walletDepositRouter.post("/admin/run-deposit-detection", async (req, res) => {
     return res.status(200).json({ success: true, data: result });
   } catch (error) {
     console.error("Run deposit detection error:", error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// TEMPORARY — admin-gated trigger to verify sweep-deposits.js end-to-end. Collects every log
+// line into the response (not just console output) so the full trace is visible over HTTP. Will
+// be removed again once confirmed working.
+walletDepositRouter.post("/admin/run-deposit-sweep", async (req, res) => {
+  try {
+    const { clerkId, adminCode } = req.body;
+    if (!isAdmin(clerkId, adminCode)) {
+      return res.status(403).json({ success: false, error: "Only the triomac60 administrator or a valid admin code can trigger a deposit sweep" });
+    }
+    const logs = [];
+    const result = await runDepositSweep({ log: (line) => logs.push(line) });
+    return res.status(200).json({ success: true, data: { ...result, logs } });
+  } catch (error) {
+    console.error("Run deposit sweep error:", error);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
