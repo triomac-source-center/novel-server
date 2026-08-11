@@ -37,4 +37,16 @@ walletDepositRouter.get("/wallet/deposit-address", async (req, res) => {
   }
 });
 
+// TEMPORARY — read-only diagnostic (no state change) to see whether req.ip is actually stable
+// across separate requests behind Render's proxy, while investigating why the admin rate
+// limiter's lockout didn't trigger. Will be reverted right after use.
+walletDepositRouter.get("/admin/debug-ip", (req, res) => {
+  res.status(200).json({
+    reqIp: req.ip,
+    reqIps: req.ips,
+    xForwardedFor: req.get("x-forwarded-for"),
+    trustProxyFn: req.app.get("trust proxy fn")?.toString?.() ?? null,
+  });
+});
+
 export default walletDepositRouter;
