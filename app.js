@@ -27,7 +27,7 @@ app.use(express.json({ limit: '50mb' }))
 app.use(cors())
 app.use(express.urlencoded({ extended: false }))
 // Parses/attaches Clerk auth when a valid session token is present; never blocks a request on its
-// own (that's what requireAuth()/requireAdminAccess do per-route) — safe to mount globally.
+// own (that's what requireAuthJson/requireAdminAccess do per-route) — safe to mount globally.
 app.use(clerkMiddleware())
 
 const mongo_ui = process.env.MONGO_UI

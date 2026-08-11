@@ -1,18 +1,19 @@
 import express from "express";
 import mongoose from "mongoose";
-import { requireAuth, getAuth } from "@clerk/express";
+import { getAuth } from "@clerk/express";
 import Withdrawal from "../models/withdrawal_model.js";
 import { debitUserBalance } from "../lib/user-account.js";
 import { isValidTronAddress } from "../lib/tron-wallet.js";
+import { requireAuthJson } from "../lib/require-auth-json.js";
 
 const WITHDRAWAL_MANUAL_REVIEW_THRESHOLD = Number(process.env.WITHDRAWAL_MANUAL_REVIEW_THRESHOLD || 500);
 
 const walletWithdrawRouter = express.Router();
 
 // This route moves money OUT to an address the caller supplies, so it requires a real verified
-// Clerk session (clerkMiddleware() is mounted globally in app.js, requireAuth() below is what
+// Clerk session (clerkMiddleware() is mounted globally in app.js, requireAuthJson below is what
 // actually enforces it on this specific route).
-walletWithdrawRouter.post("/wallet/withdraw", requireAuth(), async (req, res) => {
+walletWithdrawRouter.post("/wallet/withdraw", requireAuthJson, async (req, res) => {
   try {
     const { userId: clerkId } = getAuth(req);
     const { amount, toAddress } = req.body;

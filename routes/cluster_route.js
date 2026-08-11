@@ -1,6 +1,6 @@
 import express from "express";
 import mongoose from "mongoose";
-import { requireAuth, getAuth } from "@clerk/express";
+import { getAuth } from "@clerk/express";
 import clus from "../models/cluster_model.js";
 import AuthorshipBlock from "../models/authorship_block_model.js";
 import { notify } from "../lib/notify.js";
@@ -8,6 +8,7 @@ import { broadcastBalanceUpdate } from "../lib/sse.js";
 import { ensureUserRecord } from "../lib/user-account.js";
 import { computeCommittedFunds } from "../lib/available-funds.js";
 import { requireAdminAccess } from "../lib/admin.js";
+import { requireAuthJson } from "../lib/require-auth-json.js";
 
 const clusterRouter = express.Router();
 const SYSTEM_NAME = "triomac60";
@@ -178,7 +179,7 @@ clusterRouter.post("/clusters", requireAdminAccess, async (req, res) => {
   }
 });
 
-clusterRouter.post("/clusters/:id/invest", requireAuth(), async (req, res) => {
+clusterRouter.post("/clusters/:id/invest", requireAuthJson, async (req, res) => {
   const session = await mongoose.startSession();
   try {
     const { userId: clerkId } = getAuth(req);
