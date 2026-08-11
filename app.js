@@ -18,20 +18,20 @@ import walletWithdrawRouter from './routes/wallet_withdraw_route.js'
 
 let app = express()
 dotenv.config()
-// Set to 2 because the current network path is exactly 2 proxy hops deep in front of this app:
-// Cloudflare, then Render's own internal load balancer — confirmed by inspecting the real
-// X-Forwarded-For header in production ("<client>, <cloudflare-edge>, <render-internal>").
-// `trust proxy: 1` (the previous value) only strips one hop, so req.ip resolved to Render's
-// internal LB address instead of the real client — and that internal address changes per
-// request (Render routes through different internal nodes), which silently broke the admin
-// rate limiter's per-IP bucketing (lib/admin.js): failed attempts from the same real attacker
-// almost never landed on the same map key twice, so the lockout effectively never triggered.
+// Set to 3, confirmed empirically in production (req.socket.remoteAddress is 127.0.0.1 — Render
+// terminates the connection through a local sidecar that Express trusts for free and doesn't
+// count — then X-Forwarded-For carries exactly 3 more entries: "<real client>, <cloudflare-edge>,
+// <render-internal-LB>". Express counts "trust proxy: N" from the right (server) end of that
+// list, so N had to equal the full entry count (3) to land on the real, leftmost client address
+// instead of one of the two proxy hops. N=1 (the original value) resolved to the render-internal
+// hop; N=2 resolved to the cloudflare hop; both change per request, which is why the admin rate
+// limiter's per-IP lockout (lib/admin.js) never actually triggered for a repeat offender.
 // IMPORTANT: this number is tied to today's specific network topology, not derived automatically.
 // If Cloudflare is ever removed, or another proxy/CDN is added in front of Render, this hop count
-// changes and "2" becomes silently wrong again (same failure mode as above) — re-verify with the
+// changes and "3" becomes silently wrong again (same failure mode as above) — re-verify with the
 // X-Forwarded-For header (see the temporary /admin/debug-ip pattern used to diagnose this) if the
 // rate limiter ever seems to stop locking out repeat offenders.
-app.set('trust proxy', 2)
+app.set('trust proxy', 3)
 app.use(morgan('dev'))
 app.use(express.json({ limit: '50mb' }))
 app.use(cors())
