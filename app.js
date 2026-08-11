@@ -18,10 +18,20 @@ import walletWithdrawRouter from './routes/wallet_withdraw_route.js'
 
 let app = express()
 dotenv.config()
-// Render sits in front of this app as a reverse proxy — without this, req.ip is the proxy's
-// internal address for every request, which would bucket every visitor under one shared IP for
-// the admin rate limiter (see lib/admin.js) instead of the real client address.
-app.set('trust proxy', 1)
+// Set to 2 because the current network path is exactly 2 proxy hops deep in front of this app:
+// Cloudflare, then Render's own internal load balancer — confirmed by inspecting the real
+// X-Forwarded-For header in production ("<client>, <cloudflare-edge>, <render-internal>").
+// `trust proxy: 1` (the previous value) only strips one hop, so req.ip resolved to Render's
+// internal LB address instead of the real client — and that internal address changes per
+// request (Render routes through different internal nodes), which silently broke the admin
+// rate limiter's per-IP bucketing (lib/admin.js): failed attempts from the same real attacker
+// almost never landed on the same map key twice, so the lockout effectively never triggered.
+// IMPORTANT: this number is tied to today's specific network topology, not derived automatically.
+// If Cloudflare is ever removed, or another proxy/CDN is added in front of Render, this hop count
+// changes and "2" becomes silently wrong again (same failure mode as above) — re-verify with the
+// X-Forwarded-For header (see the temporary /admin/debug-ip pattern used to diagnose this) if the
+// rate limiter ever seems to stop locking out repeat offenders.
+app.set('trust proxy', 2)
 app.use(morgan('dev'))
 app.use(express.json({ limit: '50mb' }))
 app.use(cors())

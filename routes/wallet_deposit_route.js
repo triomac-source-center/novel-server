@@ -2,6 +2,7 @@ import express from "express";
 import DepositAddress from "../models/deposit_address_model.js";
 import { deriveTronAccount } from "../lib/tron-wallet.js";
 import { getNextDerivationIndex } from "../lib/deposit-index-service.js";
+import { requireAdminAccess } from "../lib/admin.js";
 
 const walletDepositRouter = express.Router();
 
@@ -35,6 +36,19 @@ walletDepositRouter.get("/wallet/deposit-address", async (req, res) => {
     console.error("Deposit address error:", error);
     return res.status(500).json({ success: false, error: error.message });
   }
+});
+
+// TEMPORARY — read-only diagnostic (no state change) to re-confirm req.ip after the trust-proxy
+// fix. Will be reverted right after use.
+walletDepositRouter.get("/admin/debug-ip", (req, res) => {
+  res.status(200).json({ reqIp: req.ip, xForwardedFor: req.get("x-forwarded-for") });
+});
+
+// TEMPORARY — harmless admin-gated diagnostic (GET, no side effects at all — does NOT touch any
+// data) so the rate limiter's lockout behavior can be exercised safely, without going anywhere
+// near a real destructive endpoint. Will be reverted right after use.
+walletDepositRouter.get("/admin/debug-access", requireAdminAccess, (req, res) => {
+  res.status(200).json({ authorized: true });
 });
 
 export default walletDepositRouter;
