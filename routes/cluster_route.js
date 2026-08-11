@@ -1,12 +1,13 @@
 import express from "express";
 import mongoose from "mongoose";
+import { requireAuth, getAuth } from "@clerk/express";
 import clus from "../models/cluster_model.js";
 import AuthorshipBlock from "../models/authorship_block_model.js";
 import { notify } from "../lib/notify.js";
 import { broadcastBalanceUpdate } from "../lib/sse.js";
 import { ensureUserRecord } from "../lib/user-account.js";
 import { computeCommittedFunds } from "../lib/available-funds.js";
-import { isAdmin } from "../lib/admin.js";
+import { requireAdminAccess } from "../lib/admin.js";
 
 const clusterRouter = express.Router();
 const SYSTEM_NAME = "triomac60";
@@ -121,10 +122,10 @@ async function creditOwner(Users, clerkId, amount, description, session, meta = 
   broadcastBalanceUpdate(String(clerkId), { balance: account.balance, accountType: "real" });
 }
 
-clusterRouter.post("/clusters", async (req, res) => {
+clusterRouter.post("/clusters", requireAdminAccess, async (req, res) => {
   try {
-    const { clerkId, adminCode, symbol, name, description, algorythm, cellCount, cellValue, maxLayers = 1, layerStep = 0 } = req.body;
-    if (!isAdmin(clerkId, adminCode)) return res.status(403).json({ success: false, error: "Only the triomac60 administrator or a valid admin code can create clusters" });
+    const { userId: clerkId } = getAuth(req);
+    const { symbol, name, description, algorythm, cellCount, cellValue, maxLayers = 1, layerStep = 0 } = req.body;
     const count = Number(cellCount), value = Number(cellValue), layers = Number(maxLayers), step = Number(layerStep);
     if (!symbol || !algorythm || !Number.isInteger(count) || count <= 0 || !Number.isFinite(value) || value <= 0 || !Number.isInteger(layers) || layers <= 0 || !Number.isFinite(step) || step < 0) return res.status(400).json({ success: false, error: "Invalid cluster configuration" });
     const cells = Array.from({ length: count }, (_, index) => ({ number: index + 1, ownerClerkId: null, acquiredLayer: 0, acquiredPrice: 0, acquiredAt: null }));
@@ -177,12 +178,13 @@ clusterRouter.post("/clusters", async (req, res) => {
   }
 });
 
-clusterRouter.post("/clusters/:id/invest", async (req, res) => {
+clusterRouter.post("/clusters/:id/invest", requireAuth(), async (req, res) => {
   const session = await mongoose.startSession();
   try {
-    const { clerkId, cells } = req.body;
+    const { userId: clerkId } = getAuth(req);
+    const { cells } = req.body;
     const quantity = Number(cells);
-    if (!clerkId || !Number.isInteger(quantity) || quantity <= 0) return res.status(400).json({ success: false, error: "A valid investor and whole-cell quantity are required" });
+    if (!Number.isInteger(quantity) || quantity <= 0) return res.status(400).json({ success: false, error: "A valid whole-cell quantity is required" });
     // Auto-creates the investor's wallet document if this is their first account-related action
     // (e.g. investing before ever visiting the wallet page) instead of failing with a confusing
     // "not found" error — same fix as deposit.js/withdraw.js.
@@ -394,10 +396,9 @@ clusterRouter.post("/clusters/:id/invest", async (req, res) => {
   }
 });
 
-clusterRouter.patch("/clusters/:id/publish", async (req, res) => {
+clusterRouter.patch("/clusters/:id/publish", requireAdminAccess, async (req, res) => {
   try {
-    const { clerkId, adminCode } = req.body;
-    if (!isAdmin(clerkId, adminCode)) return res.status(403).json({ success: false, error: "Only the triomac60 administrator or a valid admin code can publish clusters" });
+    const { userId: clerkId } = getAuth(req);
     const cluster = await clus.findById(req.params.id);
     if (!cluster) return res.status(404).json({ success: false, error: "Cluster not found" });
     if (cluster.status !== "offline") return res.status(400).json({ success: false, error: "Only a draft cluster can be published" });
@@ -412,10 +413,9 @@ clusterRouter.patch("/clusters/:id/publish", async (req, res) => {
   }
 });
 
-clusterRouter.patch("/clusters/:id/close", async (req, res) => {
+clusterRouter.patch("/clusters/:id/close", requireAdminAccess, async (req, res) => {
   try {
-    const { clerkId, adminCode } = req.body;
-    if (!isAdmin(clerkId, adminCode)) return res.status(403).json({ success: false, error: "Only the triomac60 administrator or a valid admin code can close clusters" });
+    const { userId: clerkId } = getAuth(req);
     const cluster = await clus.findById(req.params.id);
     if (!cluster) return res.status(404).json({ success: false, error: "Cluster not found" });
     if (cluster.status === "closed") return res.status(400).json({ success: false, error: "Cluster is already closed" });
@@ -431,10 +431,8 @@ clusterRouter.patch("/clusters/:id/close", async (req, res) => {
   }
 });
 
-clusterRouter.delete("/clusters/:id", async (req, res) => {
+clusterRouter.delete("/clusters/:id", requireAdminAccess, async (req, res) => {
   try {
-    const { clerkId, adminCode } = req.body;
-    if (!isAdmin(clerkId, adminCode)) return res.status(403).json({ success: false, error: "Only the triomac60 administrator or a valid admin code can delete clusters" });
     const cluster = await clus.findByIdAndDelete(req.params.id);
     if (!cluster) return res.status(404).json({ success: false, error: "Cluster not found" });
     // Otherwise these would be orphaned, pointing at a cluster that no longer exists (same "no
@@ -447,10 +445,8 @@ clusterRouter.delete("/clusters/:id", async (req, res) => {
   }
 });
 
-clusterRouter.delete("/clusters", async (req, res) => {
+clusterRouter.delete("/clusters", requireAdminAccess, async (req, res) => {
   try {
-    const { clerkId, adminCode } = req.body;
-    if (!isAdmin(clerkId, adminCode)) return res.status(403).json({ success: false, error: "Only the triomac60 administrator or a valid admin code can delete clusters" });
     const result = await clus.deleteMany({});
     await AuthorshipBlock.deleteMany({});
     return res.status(200).json({ success: true, deletedCount: result.deletedCount });

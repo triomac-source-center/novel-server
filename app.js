@@ -3,6 +3,7 @@ import cors from 'cors'
 import dotenv from 'dotenv'
 import morgan from 'morgan'
 import mongoose from 'mongoose'
+import { clerkMiddleware } from '@clerk/express'
 import depositRouter from './routes/deposit.js'
 import clusterRouter from './routes/cluster_route.js'
 import allClusRouter from './routes/get_clus_router.js'
@@ -17,10 +18,17 @@ import walletWithdrawRouter from './routes/wallet_withdraw_route.js'
 
 let app = express()
 dotenv.config()
+// Render sits in front of this app as a reverse proxy — without this, req.ip is the proxy's
+// internal address for every request, which would bucket every visitor under one shared IP for
+// the admin rate limiter (see lib/admin.js) instead of the real client address.
+app.set('trust proxy', 1)
 app.use(morgan('dev'))
 app.use(express.json({ limit: '50mb' }))
 app.use(cors())
 app.use(express.urlencoded({ extended: false }))
+// Parses/attaches Clerk auth when a valid session token is present; never blocks a request on its
+// own (that's what requireAuth()/requireAdminAccess do per-route) — safe to mount globally.
+app.use(clerkMiddleware())
 
 const mongo_ui = process.env.MONGO_UI
 

@@ -1,5 +1,6 @@
 import express from "express";
 import mongoose from "mongoose";
+import { requireAuth, getAuth } from "@clerk/express";
 import AuthorshipBlock from "../models/authorship_block_model.js";
 import clus from "../models/cluster_model.js";
 import { notify } from "../lib/notify.js";
@@ -88,12 +89,13 @@ blockRouter.get("/blocks/:id", async (req, res) => {
 // Buys one or more blocks in a single transaction (spec 6.1). Each block is either an initial
 // sale (status "available", money goes to the system/cluster's systemReserve) or a resale
 // (status "sold" + listedForResale, money goes peer-to-peer to the current owner, no system cut).
-blockRouter.post("/blocks/buy", async (req, res) => {
+blockRouter.post("/blocks/buy", requireAuth(), async (req, res) => {
   const session = await mongoose.startSession();
   try {
-    const { clerkId, blockIds } = req.body;
-    if (!clerkId || !Array.isArray(blockIds) || blockIds.length === 0) {
-      return res.status(400).json({ success: false, error: "A buyer and at least one block id are required" });
+    const { userId: clerkId } = getAuth(req);
+    const { blockIds } = req.body;
+    if (!Array.isArray(blockIds) || blockIds.length === 0) {
+      return res.status(400).json({ success: false, error: "At least one block id is required" });
     }
     await ensureUserRecord(String(clerkId));
     let response;

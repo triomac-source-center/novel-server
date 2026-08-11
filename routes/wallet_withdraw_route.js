@@ -1,6 +1,6 @@
 import express from "express";
 import mongoose from "mongoose";
-import { clerkMiddleware, requireAuth, getAuth } from "@clerk/express";
+import { requireAuth, getAuth } from "@clerk/express";
 import Withdrawal from "../models/withdrawal_model.js";
 import { debitUserBalance } from "../lib/user-account.js";
 import { isValidTronAddress } from "../lib/tron-wallet.js";
@@ -9,12 +9,9 @@ const WITHDRAWAL_MANUAL_REVIEW_THRESHOLD = Number(process.env.WITHDRAWAL_MANUAL_
 
 const walletWithdrawRouter = express.Router();
 
-// This route moves money OUT to an address the caller supplies, so — unlike every other route in
-// this backend, which trusts a plain clerkId passed in the request — it requires a real verified
-// Clerk session. Scoped to just this router (not applied in app.js globally) so no other existing
-// route's behavior changes.
-walletWithdrawRouter.use(clerkMiddleware());
-
+// This route moves money OUT to an address the caller supplies, so it requires a real verified
+// Clerk session (clerkMiddleware() is mounted globally in app.js, requireAuth() below is what
+// actually enforces it on this specific route).
 walletWithdrawRouter.post("/wallet/withdraw", requireAuth(), async (req, res) => {
   try {
     const { userId: clerkId } = getAuth(req);

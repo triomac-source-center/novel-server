@@ -1,7 +1,7 @@
 import express from "express";
 import clus from "../models/cluster_model.js";
 import AuthorshipBlock from "../models/authorship_block_model.js";
-import { isAdmin } from "../lib/admin.js";
+import { requireAdminAccess } from "../lib/admin.js";
 import { getUsersCollection, getDefaultAccounts } from "../lib/user-account.js";
 
 const adminResetRouter = express.Router();
@@ -10,13 +10,8 @@ const adminResetRouter = express.Router();
 // user's wallet (both real and demo balances + full transaction history) reset to zero, so the
 // whole system — including account balances — genuinely starts from scratch and everyone has to
 // deposit again. Distinct from DELETE /clusters (which only clears clusters/blocks, not wallets).
-adminResetRouter.delete("/admin/reset-all", async (req, res) => {
+adminResetRouter.delete("/admin/reset-all", requireAdminAccess, async (req, res) => {
   try {
-    const { clerkId, adminCode } = req.body;
-    if (!isAdmin(clerkId, adminCode)) {
-      return res.status(403).json({ success: false, error: "Only the triomac60 administrator or a valid admin code can reset all data" });
-    }
-
     const clusterResult = await clus.deleteMany({});
     const blockResult = await AuthorshipBlock.deleteMany({});
     const Users = getUsersCollection();

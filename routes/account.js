@@ -2,6 +2,7 @@ import express from "express";
 import { notify } from "../lib/notify.js";
 import { addSseClient, broadcastBalanceUpdate } from "../lib/sse.js";
 import { ensureUserRecord, getDefaultAccounts, getUsersCollection, normalizeAccount } from "../lib/user-account.js";
+import { retiredEndpoint } from "../lib/deprecated-route.js";
 
 const accountRouter = express.Router();
 
@@ -57,91 +58,9 @@ accountRouter.get("/account/stream", (req, res) => {
   addSseClient(req, res, String(clerkId));
 });
 
-accountRouter.post("/account/fund", async (req, res) => {
-  try {
-    const { clerkId, amount, type = "real", description } = req.body;
-
-    if (!clerkId) {
-      return res.status(400).json({ message: "Missing clerkId" });
-    }
-
-    if (!Number.isFinite(Number(amount)) || Number(amount) === 0) {
-      return res.status(400).json({ message: "Invalid amount" });
-    }
-
-    const normalizedType = type === "demo" ? "demo" : "real";
-    const parsedAmount = Number(amount);
-    const Users = await getUsersCollection();
-    const user = await ensureUserRecord(String(clerkId));
-    const accounts = user.accounts || getDefaultAccounts();
-    const currentAccount = normalizeAccount(accounts[normalizedType], normalizedType === "demo" ? 10000 : 0);
-    const nextBalance = currentAccount.balance + parsedAmount;
-
-    if (nextBalance < 0) {
-      return res.status(400).json({ message: "Insufficient balance" });
-    }
-
-    const transaction = {
-      type: parsedAmount >= 0 ? "credit" : "debit",
-      category: "wallet",
-      amount: Math.abs(parsedAmount),
-      balanceBefore: currentAccount.balance,
-      balanceAfter: nextBalance,
-      description: description || `${normalizedType} account update`,
-      createdAt: new Date(),
-    };
-
-    const updatedTransactions = [...currentAccount.transactions, transaction];
-    const nextAccounts = {
-      ...accounts,
-      [normalizedType]: {
-        ...currentAccount,
-        balance: nextBalance,
-        transactions: updatedTransactions,
-        updatedAt: new Date(),
-      },
-    };
-
-    const updatedUser = await Users.findOneAndUpdate(
-      { clerkId: String(clerkId) },
-      {
-        $set: {
-          accounts: nextAccounts,
-          "wallet.balance": nextBalance,
-          "wallet.transactions": [...((user.wallet?.transactions || [])), transaction],
-        },
-      },
-      { returnDocument: "after" }
-    );
-
-    broadcastBalanceUpdate(String(clerkId), {
-      balance: nextBalance,
-      accountType: normalizedType,
-    });
-
-    await notify({
-      clerkId: String(clerkId),
-      type: parsedAmount >= 0 ? "deposit" : "withdraw",
-      title: parsedAmount >= 0 ? "Balance credited" : "Balance debited",
-      message: `${normalizedType === "demo" ? "Demo" : "Real"} account ${parsedAmount >= 0 ? "credited" : "debited"} by $${Math.abs(parsedAmount).toLocaleString()}.`,
-    });
-
-    return res.status(200).json({
-      message: "Account updated",
-      clerkId: String(clerkId),
-      accountType: normalizedType,
-      balance: nextBalance,
-      account: nextAccounts[normalizedType],
-      wallet: {
-        balance: nextBalance,
-        transactions: [...((updatedUser.wallet?.transactions || [])), transaction],
-      },
-    });
-  } catch (error) {
-    console.error("Fund account error:", error);
-    return res.status(500).json({ message: "Server error" });
-  }
-});
+// Retired: used to mint/remove arbitrary balance for any clerkId with zero verification. Demo
+// balance top-ups now go through POST /account/set-demo-balance instead.
+accountRouter.post("/account/fund", retiredEndpoint("POST /account/set-demo-balance (demo) or a real crypto deposit (real)"));
 
 accountRouter.post("/account/set-demo-balance", async (req, res) => {
   try {
