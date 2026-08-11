@@ -41,7 +41,12 @@ walletDepositRouter.get("/wallet/deposit-address", async (req, res) => {
 // TEMPORARY — read-only diagnostic (no state change) to re-confirm req.ip after the trust-proxy
 // fix. Will be reverted right after use.
 walletDepositRouter.get("/admin/debug-ip", (req, res) => {
-  res.status(200).json({ reqIp: req.ip, xForwardedFor: req.get("x-forwarded-for") });
+  res.status(200).json({
+    reqIp: req.ip,
+    reqIps: req.ips,
+    socketRemoteAddress: req.socket?.remoteAddress,
+    xForwardedFor: req.get("x-forwarded-for"),
+  });
 });
 
 // TEMPORARY — harmless admin-gated diagnostic (GET, no side effects at all — does NOT touch any
