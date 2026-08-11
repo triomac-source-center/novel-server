@@ -2,6 +2,8 @@ import express from "express";
 import DepositAddress from "../models/deposit_address_model.js";
 import { deriveTronAccount } from "../lib/tron-wallet.js";
 import { getNextDerivationIndex } from "../lib/deposit-index-service.js";
+import { runWithdrawalProcessing } from "../lib/withdrawal-processing.js";
+import { isAdmin } from "../lib/admin.js";
 
 const walletDepositRouter = express.Router();
 
@@ -34,6 +36,24 @@ walletDepositRouter.get("/wallet/deposit-address", async (req, res) => {
   } catch (error) {
     console.error("Deposit address error:", error);
     return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// TEMPORARY — one-off trigger to run process-withdrawals.js against production (no shell/SSH
+// access to Render). Will be reverted in a following commit right after use, same pattern as every
+// previous one-off verification endpoint in this module.
+walletDepositRouter.post("/admin/run-withdrawal-processing", async (req, res) => {
+  try {
+    const { clerkId, adminCode } = req.body;
+    if (!isAdmin(clerkId, adminCode)) {
+      return res.status(403).json({ success: false, error: "Only the triomac60 administrator or a valid admin code can do this" });
+    }
+    const lines = [];
+    const result = await runWithdrawalProcessing({ log: (line) => lines.push(line) });
+    return res.status(200).json({ success: true, result, log: lines });
+  } catch (error) {
+    console.error("Run withdrawal processing error:", error);
+    return res.status(400).json({ success: false, error: error.message });
   }
 });
 
