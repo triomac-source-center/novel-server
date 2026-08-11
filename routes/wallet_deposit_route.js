@@ -2,6 +2,8 @@ import express from "express";
 import DepositAddress from "../models/deposit_address_model.js";
 import { deriveTronAccount } from "../lib/tron-wallet.js";
 import { getNextDerivationIndex } from "../lib/deposit-index-service.js";
+import { ensureUserRecord, debugCounters } from "../lib/user-account.js";
+import { isAdmin } from "../lib/admin.js";
 
 const walletDepositRouter = express.Router();
 
@@ -34,6 +36,40 @@ walletDepositRouter.get("/wallet/deposit-address", async (req, res) => {
   } catch (error) {
     console.error("Deposit address error:", error);
     return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// TEMPORARY — proves the ensureUserRecord race fix: calls it N times rapidly for a normal,
+// already-valid account and reports how many of those calls actually reached the $set write path
+// (via the debugCounters instrumentation added alongside it). Will be reverted together.
+walletDepositRouter.post("/admin/test-ensure-user-record", async (req, res) => {
+  try {
+    const { clerkId, adminCode, targetClerkId, iterations = 10 } = req.body;
+    if (!isAdmin(clerkId, adminCode)) {
+      return res.status(403).json({ success: false, error: "Only the triomac60 administrator or a valid admin code can do this" });
+    }
+    if (!targetClerkId) {
+      return res.status(400).json({ success: false, error: "Missing targetClerkId" });
+    }
+
+    const before = debugCounters.ensureUserRecordWrites;
+    const results = [];
+    for (let i = 0; i < iterations; i += 1) {
+      const user = await ensureUserRecord(targetClerkId);
+      results.push({ balance: user.accounts?.real?.balance, transactionCount: user.accounts?.real?.transactions?.length });
+    }
+    const after = debugCounters.ensureUserRecordWrites;
+
+    return res.status(200).json({
+      success: true,
+      iterations,
+      writesTriggered: after - before,
+      resultsConsistent: results.every((r) => r.balance === results[0].balance && r.transactionCount === results[0].transactionCount),
+      results,
+    });
+  } catch (error) {
+    console.error("Test ensureUserRecord error:", error);
+    return res.status(400).json({ success: false, error: error.message });
   }
 });
 
