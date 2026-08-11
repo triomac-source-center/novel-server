@@ -1,39 +1,66 @@
-// Manual deposit-detection worker. Run with: node scripts/detect-deposits.js
-//
-// Owns its own Mongo connection lifecycle (connect, run, disconnect, exit) — the actual detection
-// logic lives in lib/deposit-detection.js, shared with the HTTP-triggered path so both can re-run
-// safely against the same on-chain deposits with no risk of double-crediting.
+// Deposit-detection worker. Run with: node scripts/detect-deposits.js
+// Intended to run on a Render Cron Job (every 2 minutes) — owns its own Mongo connection
+// lifecycle (connect, run, disconnect, exit). The actual detection logic lives in
+// lib/deposit-detection.js, shared with the HTTP-triggered path so both can re-run safely against
+// the same on-chain deposits with no risk of double-crediting (unique txid index).
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import { runDepositDetection } from "../lib/deposit-detection.js";
+import { sendAlert } from "../lib/alert.js";
 
 dotenv.config();
 
 async function run() {
+  const startedAt = Date.now();
   const mongoUri = process.env.MONGO_UI;
   if (!mongoUri) throw new Error("MONGO_UI environment variable is not set");
   await mongoose.connect(mongoUri);
 
-  const { checked, credited, alreadyProcessed, errors } = await runDepositDetection();
-  console.log(`Checked ${checked} deposit address(es).`);
-  for (const entry of credited) {
+  let result;
+  try {
+    result = await runDepositDetection();
+  } finally {
+    await mongoose.disconnect();
+  }
+
+  for (const entry of result.credited) {
     console.log(
       `[CREDITED] user=${entry.userId} address=${entry.address} amount=${entry.amount} ${entry.symbol} txid=${entry.txid} new_balance=${entry.newBalance}`
     );
   }
-  for (const entry of alreadyProcessed) {
+  for (const entry of result.alreadyProcessed) {
     console.log(`[ALREADY PROCESSED] txid=${entry.txid}${entry.race ? " (race with another run)" : ""} — skipped.`);
   }
-  for (const entry of errors) {
-    console.error(`Failed to check ${entry.address}:`, entry.error);
+  for (const entry of result.errors) {
+    console.error(`[ERROR] address=${entry.address} userId=${entry.userId}: ${entry.error}`);
   }
 
-  await mongoose.disconnect();
+  const durationMs = Date.now() - startedAt;
+  const summary = {
+    checked: result.checked,
+    credited: result.credited.length,
+    alreadyProcessed: result.alreadyProcessed.length,
+    errors: result.errors.length,
+    durationMs,
+  };
+  console.log(`[detect-deposits] SUMMARY ${JSON.stringify(summary)}`);
+
+  // "No deposits found" is a normal, expected outcome and never alerts — only real per-address
+  // failures (TronGrid errors, derivation issues, etc.) do.
+  if (result.errors.length > 0) {
+    const details = result.errors.map((e) => `- ${e.address} (${e.userId}): ${e.error}`).join("\n");
+    await sendAlert(`⚠️ detect-deposits.js: ${result.errors.length} error(s) this run.\n${details}`);
+  }
+
+  return summary;
 }
 
 run()
-  .then(() => process.exit(0))
-  .catch((error) => {
-    console.error("detect-deposits failed:", error);
+  .then((summary) => {
+    process.exit(summary.errors > 0 ? 1 : 0);
+  })
+  .catch(async (error) => {
+    console.error("[detect-deposits] FATAL:", error);
+    await sendAlert(`🔴 detect-deposits.js crashed: ${error.message}`);
     process.exit(1);
   });
