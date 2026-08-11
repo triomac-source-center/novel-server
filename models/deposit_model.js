@@ -10,6 +10,10 @@ const DepositSchema = new Schema({
   txid: { type: String, required: true, unique: true },
   amount: { type: Number, required: true },
   address: { type: String, required: true },
+  // Denormalized from the DepositAddress this came from, so sweep-deposits.js can re-derive that
+  // address's private key without an extra lookup. Not `required` — older records created before
+  // this field existed fall back to a DepositAddress lookup by `address` in lib/deposit-sweep.js.
+  derivationIndex: { type: Number, default: null },
   status: { type: String, enum: ["confirmed"], default: "confirmed" },
   creditedAt: { type: Date, default: Date.now },
 
