@@ -1,7 +1,7 @@
 import express from "express";
 import DepositAddress from "../models/deposit_address_model.js";
 import Deposit from "../models/deposit_model.js";
-import { deriveTronAccount } from "../lib/tron-wallet.js";
+import { deriveTronAccount, getTrc20RawBalance, getTrxBalance } from "../lib/tron-wallet.js";
 import { getNextDerivationIndex } from "../lib/deposit-index-service.js";
 
 const walletDepositRouter = express.Router();
@@ -47,6 +47,16 @@ walletDepositRouter.get("/admin/debug-deposits", async (req, res) => {
   if (userId) filter.userId = userId;
   const deposits = await Deposit.find(filter).lean();
   return res.status(200).json({ count: deposits.length, deposits });
+});
+
+// TEMPORARY — read-only diagnostic: current on-chain USDT/TRX balance of a given address, using
+// the same tested helpers sweepAddress relies on. Will be reverted right after use.
+walletDepositRouter.get("/admin/debug-balance", async (req, res) => {
+  const { address } = req.query;
+  if (!address) return res.status(400).json({ success: false, error: "Missing address" });
+  const USDT_CONTRACT_ADDRESS = process.env.USDT_CONTRACT_ADDRESS || "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf";
+  const [usdtRaw, trx] = await Promise.all([getTrc20RawBalance(address, USDT_CONTRACT_ADDRESS), getTrxBalance(address)]);
+  return res.status(200).json({ address, usdtRaw, usdt: Number(usdtRaw) / 1e6, trx });
 });
 
 export default walletDepositRouter;
