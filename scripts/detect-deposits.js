@@ -31,6 +31,9 @@ async function run() {
   for (const entry of result.alreadyProcessed) {
     console.log(`[ALREADY PROCESSED] txid=${entry.txid}${entry.race ? " (race with another run)" : ""} — skipped.`);
   }
+  for (const entry of result.ignoredInternal) {
+    console.log(`[IGNORED INTERNAL] txid=${entry.txid} from=${entry.from} to=${entry.to} (userId=${entry.userId}) — internal system transfer, not an external deposit.`);
+  }
   for (const entry of result.errors) {
     console.error(`[ERROR] address=${entry.address} userId=${entry.userId}: ${entry.error}`);
   }
@@ -40,6 +43,7 @@ async function run() {
     checked: result.checked,
     credited: result.credited.length,
     alreadyProcessed: result.alreadyProcessed.length,
+    ignoredInternal: result.ignoredInternal.length,
     errors: result.errors.length,
     durationMs,
   };
