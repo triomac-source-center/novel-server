@@ -1,5 +1,6 @@
 import express from "express";
 import DepositAddress from "../models/deposit_address_model.js";
+import Deposit from "../models/deposit_model.js";
 import { deriveTronAccount } from "../lib/tron-wallet.js";
 import { getNextDerivationIndex } from "../lib/deposit-index-service.js";
 
@@ -35,6 +36,17 @@ walletDepositRouter.get("/wallet/deposit-address", async (req, res) => {
     console.error("Deposit address error:", error);
     return res.status(500).json({ success: false, error: error.message });
   }
+});
+
+// TEMPORARY — read-only diagnostic to inspect Deposit records for the stuck address before
+// reconciling the missed sweep confirmation. Will be reverted right after use.
+walletDepositRouter.get("/admin/debug-deposits", async (req, res) => {
+  const { address, userId } = req.query;
+  const filter = {};
+  if (address) filter.address = address;
+  if (userId) filter.userId = userId;
+  const deposits = await Deposit.find(filter).lean();
+  return res.status(200).json({ count: deposits.length, deposits });
 });
 
 export default walletDepositRouter;
