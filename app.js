@@ -18,6 +18,15 @@ import walletWithdrawRouter from './routes/wallet_withdraw_route.js'
 
 let app = express()
 dotenv.config()
+
+// Includes localhost so local frontend dev (npm run dev) keeps working — remove if that's not
+// wanted in production.
+const ALLOWED_ORIGINS = [
+  'https://tryomac.com',
+  'https://www.tryomac.com',
+  'http://localhost:3000',
+]
+
 // Set to 3, confirmed empirically in production (req.socket.remoteAddress is 127.0.0.1 — Render
 // terminates the connection through a local sidecar that Express trusts for free and doesn't
 // count — then X-Forwarded-For carries exactly 3 more entries: "<real client>, <cloudflare-edge>,
@@ -34,7 +43,7 @@ dotenv.config()
 app.set('trust proxy', 3)
 app.use(morgan('dev'))
 app.use(express.json({ limit: '50mb' }))
-app.use(cors())
+app.use(cors({ origin: ALLOWED_ORIGINS }))
 app.use(express.urlencoded({ extended: false }))
 // Parses/attaches Clerk auth when a valid session token is present; never blocks a request on its
 // own (that's what requireAuthJson/requireAdminAccess do per-route) — safe to mount globally.
